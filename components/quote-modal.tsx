@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import styles from "./quote-modal.module.css";
 
-type QuoteModalProps = { open: boolean; onClose: () => void };
+type QuoteModalProps = { open: boolean; onClose: () => void; defaultService?: string };
 type Extra = { id: string; name: string; note: string; price: number; icon: typeof Sparkles };
 
 const extraGroups: { label: string; items: Extra[] }[] = [
@@ -65,9 +65,9 @@ function Quantity({ value, setValue, min = 0 }: { value: number; setValue: (n: n
   </div>;
 }
 
-export function QuoteModal({ open, onClose }: QuoteModalProps) {
+export function QuoteModal({ open, onClose, defaultService = "End of Lease Cleaning" }: QuoteModalProps) {
   const [step, setStep] = useState(1);
-  const [service, setService] = useState("End of Lease Cleaning");
+  const [service, setService] = useState(defaultService);
   const [property, setProperty] = useState("Single storey");
   const [bedrooms, setBedrooms] = useState(1);
   const [bathrooms, setBathrooms] = useState(1);

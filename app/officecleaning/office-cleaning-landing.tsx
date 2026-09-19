@@ -1,0 +1,79 @@
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
+import { useState } from "react";
+import {
+  ArrowRight, ArrowUpRight, Building2, CalendarCheck, Check, ChevronDown,
+  CircleCheck, ClipboardCheck, Clock3, Coffee, DoorOpen, MapPin, Menu,
+  MessageCircle, Monitor, Phone, ShieldCheck, Sparkles, SprayCan, Store,
+  Trash2, UserRound, Warehouse, WashingMachine, X,
+} from "lucide-react";
+import { Button } from "../../components/ui/button";
+import { QuoteModal } from "../../components/quote-modal";
+import { ServiceMenu } from "../../components/service-menu";
+import styles from "../endofleaseclean/page.module.css";
+
+const navLinks = [["Home", "/"], ["Services", "#included"], ["How it works", "#process"], ["Why WeDo", "#workplace-plan"], ["Service areas", "#service-areas"]] as const;
+
+function Action({ light = false, onClick }: { light?: boolean; onClick: () => void }) {
+  return <Button type="button" onClick={onClick} className={`action ${light ? "light" : ""}`}>Get a free quote <ArrowUpRight size={18} /></Button>;
+}
+
+function Logo() {
+  return <Link className="logo brand-logo-lockup" href="/#home" aria-label="WeDo Cleaning Services home"><Image src="/wedo-mark.png" width={544} height={544} alt="" /><span className="logo-wordmark"><strong>We<em>Do</em></strong><small>CLEANING SERVICES</small></span></Link>;
+}
+
+const checklist = [
+  { title: "Desks & workstations", icon: Monitor, items: ["Wipe accessible desk surfaces", "Dust screens, phones and equipment exteriors", "Empty bins and replace supplied liners", "Wipe switches, handles and touch points"] },
+  { title: "Kitchens & break rooms", icon: Coffee, items: ["Clean benches, sinks and tapware", "Wipe microwave and appliance exteriors", "Clean tables and high-touch surfaces", "Vacuum and mop floors"] },
+  { title: "Bathrooms & amenities", icon: WashingMachine, items: ["Clean toilets, basins, mirrors and fixtures", "Sanitise touch points and cubicle doors", "Mop floors and remove visible marks", "Restock consumables from your onsite supply"] },
+  { title: "Reception & shared areas", icon: DoorOpen, items: ["Clean reception and meeting-room surfaces", "Vacuum carpets and mop hard floors", "Tidy chairs and presentation areas", "Clean accessible internal glass and entry points"] },
+];
+
+const faqs = [
+  ["Can cleaning happen outside business hours?", "Yes. Early-morning, evening and weekend options can be discussed so cleaning causes minimal disruption to your team and visitors."],
+  ["How is office cleaning priced?", "We consider floor area, workstations, bathrooms, kitchens, access, required frequency and the condition of the space. A quick walkthrough may be recommended before confirming the proposal."],
+  ["Can we choose what is cleaned each visit?", "Yes. Your recurring checklist is built around your workplace priorities, with less frequent detail tasks scheduled separately where needed."],
+  ["Do you restock bathroom and kitchen consumables?", "We can restock toilet paper, hand towels, soap and similar items from supplies kept onsite. Tell us where they are stored when arranging access."],
+  ["Can you add carpets, windows or deep cleaning?", "Yes. Carpet steam cleaning, interior glass, detailed kitchen cleaning and periodic deep cleans can be added to an ongoing plan or booked separately."],
+  ["Which Sydney areas do you cover?", "We welcome enquiries across Sydney CBD, North Sydney, the Inner West, Eastern Suburbs, Parramatta and surrounding areas. Availability is confirmed using your workplace postcode."],
+] as const;
+
+export function OfficeCleaningLanding() {
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const openQuote = () => { setMenuOpen(false); setQuoteOpen(true); };
+
+  return <><main id="office-cleaning" className={styles.page} aria-hidden={quoteOpen} inert={quoteOpen}>
+    <div className="announcement"><span><MapPin size={13} /> Sydney locals. A cleaner kind of care.</span><span className="announcement-right">Your space. Our specialty.</span></div>
+    <div className="site-navigation"><header className="wrap header"><Logo /><nav aria-label="Main navigation">{navLinks.map(([label, href]) => label === "Services" ? <ServiceMenu key={label} /> : <Link key={href} href={href}>{label}</Link>)}</nav><div className="nav-utilities"><a href="tel:+61401356937" className="nav-phone" aria-label="Call WeDo on 0401 356 937"><span className="phone-symbol"><Phone size={19} /></span><span><small>LET’S TALK CLEAN</small><strong>0401 356 937</strong></span></a><span className="nav-divider" /><button type="button" className="nav-login" aria-label="Login" title="Login" aria-disabled="true"><UserRound size={21} /></button></div><div className="header-action"><Action onClick={openQuote} /></div><button className="menu-toggle" aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} aria-controls="mobile-navigation" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button></header>{menuOpen && <nav id="mobile-navigation" className="mobile-menu" aria-label="Mobile navigation">{navLinks.map(([label, href]) => label === "Services" ? <ServiceMenu key={label} onNavigate={() => setMenuOpen(false)} /> : <Link key={href} href={href} onClick={() => setMenuOpen(false)}>{label}<ArrowRight size={16} /></Link>)}<div className="mobile-contact"><Phone size={20} /><a href="tel:+61401356937" className="mobile-phone-link"><small>CALL OUR SYDNEY TEAM</small><strong>0401 356 937</strong></a><button type="button" aria-disabled="true" className="mobile-login"><UserRound size={18} />Login</button></div><Action onClick={openQuote} /></nav>}</div>
+
+    <section className={styles.hero}>
+      <div className={styles.heroContent}><div className={styles.eyebrow}><Sparkles /> Office & commercial cleaning Sydney</div><h1>A cleaner workplace.<br /><em>Ready for business.</em></h1><p className={styles.heroLead}>Thoughtful office cleaning built around your team, your trading hours and the way your workplace is actually used.</p><div className={styles.heroActions}><Action onClick={openQuote} /><a href="tel:+61401356937"><Phone /> Discuss your workplace</a></div><div className={styles.heroProof}><span><CircleCheck /> Tailored workplace checklist</span><span><CircleCheck /> Flexible recurring schedules</span><span><CircleCheck /> Clear scope and proposal</span></div></div>
+      <div className={styles.heroVisual}><Image src="/images/office.jpg" alt="Bright, professionally cleaned Sydney office" fill sizes="(max-width: 900px) 100vw, 48vw" priority /><div className={styles.priceCard}><small>Office cleaning plan</small><strong className={styles.officeEstimate}>Tailored quote</strong><p>Pricing is confirmed after we understand your floor area, facilities and cleaning frequency.</p></div><div className={styles.inspectionCard}><ShieldCheck /><div><strong>Built around your hours</strong><span>Morning · evening · recurring</span></div></div></div>
+    </section>
+
+    <section className={styles.trustStrip} aria-label="Office cleaning benefits"><div><CalendarCheck /><span><strong>Flexible scheduling</strong><small>Plan around your operating hours</small></span></div><div><ClipboardCheck /><span><strong>Documented checklist</strong><small>Clear priorities for every visit</small></span></div><div><MapPin /><span><strong>Sydney workplaces</strong><small>Availability confirmed by postcode</small></span></div><div><MessageCircle /><span><strong>Local communication</strong><small>One team to discuss your clean</small></span></div></section>
+
+    <section className={styles.introSection}><div><span className={styles.sectionKicker}>Clean spaces support good work</span><h2>Office cleaning your team will notice.</h2></div><p>From reception and meeting rooms to desks, kitchens and bathrooms, we focus on the areas staff and visitors use every day. Your plan can cover regular upkeep plus scheduled detail work throughout the year.</p></section>
+
+    <section id="included" className={styles.includedSection}><div className={styles.sectionHeading}><div><span className={styles.sectionKicker}>A checklist for your workplace</span><h2>What every visit can cover</h2></div><p>Your final scope is tailored to the building, access arrangements, service frequency and the priorities you confirm with us.</p></div><div className={styles.checkGrid}>{checklist.map(({ title, icon: Icon, items }, index) => <article className={styles.checkCard} key={title}><div className={styles.checkCardTop}><span><Icon /></span><small>0{index + 1}</small></div><h3>{title}</h3><ul>{items.map(item => <li key={item}><Check />{item}</li>)}</ul></article>)}</div><p className={styles.scopeNote}><ShieldCheck /> Equipment, consumables and specialist requirements are confirmed as part of your proposal.</p></section>
+
+    <section id="workplace-plan" className="bond-section"><div className="wrap bond-grid"><div className="bond-copy"><div className="eyebrow">A PLAN THAT FITS YOUR BUSINESS</div><h2>Your workplace stays ready.<br /><em>Your team keeps moving.</em></h2><p>Choose the frequency that suits your space—from weekly upkeep to multiple visits each week. We shape the checklist around traffic levels, amenities and the presentation standards that matter to your business.</p><p>Early-morning and after-hours options can reduce interruptions while helping your team return to a fresh, organised workplace.</p><div className="bond-points"><span><Check />Offices, suites and shared workplaces</span><span><Check />Kitchens, bathrooms and workstations</span><span><Check />Recurring or one-off deep cleaning</span><span><Check />Agreed access and security process</span></div><Action light onClick={openQuote} /></div><aside className="guarantee-card"><span className="guarantee-icon"><ClipboardCheck size={56} /></span><div className="eyebrow">YOUR CLEANING PLAN</div><h3>Clear tasks.<br />Consistent care.</h3><p>We document the areas and priorities for each visit, then schedule periodic extras separately so expectations remain clear.</p><div className="guarantee-steps"><span><b>01</b>Walk through your workplace</span><span><b>02</b>Agree on scope and frequency</span><span><b>03</b>Review and refine when needed</span></div><small>Services, access times and pricing are confirmed in your individual proposal.</small></aside></div></section>
+
+    <section id="process" className={styles.processSection}><div className={styles.sectionHeading}><div><span className={styles.sectionKicker}>Simple setup, reliable routine</span><h2>How it works</h2></div><button onClick={openQuote}>Request a workplace quote <ArrowRight /></button></div><div className={styles.steps}>{[["01", "Tell us about the space", "Share the floor area, facilities, staff numbers and preferred frequency."], ["02", "Arrange an assessment", "We clarify access, priorities and any building requirements."], ["03", "Approve your plan", "Receive a clear scope, schedule and price for your workplace."], ["04", "We keep it fresh", "Regular visits follow the agreed checklist, with feedback welcomed."]].map(([number, title, body]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{body}</p></article>)}</div></section>
+
+    <section className={styles.extrasSection}><div className={styles.extrasIntro}><span className={styles.sectionKicker}>Beyond the regular clean</span><h2>Schedule deeper attention when it’s needed.</h2><p>Add periodic services to your workplace plan or request them as one-off projects.</p><button onClick={openQuote}>Build my workplace plan <ArrowRight /></button></div><div className={styles.extraList}>{[["Carpet steam cleaning", "Periodic care for office carpets and traffic areas", SprayCan], ["Interior windows & glass", "Meeting rooms, partitions and accessible glass", DoorOpen], ["Kitchen deep cleaning", "Detailed appliances, cupboards and built-up residue", Coffee], ["High-touch detailing", "Doors, switches, rails and shared equipment", Sparkles]].map(([title, text, Icon]) => { const ItemIcon = Icon as typeof Sparkles; return <div key={title as string}><span><ItemIcon /></span><div><h3>{title as string}</h3><p>{text as string}</p></div><ArrowRight /></div>; })}</div></section>
+
+    <section className={styles.prepSection}><div className={styles.prepCard}><span className={styles.sectionKicker}>Workplaces we can support</span><h2>From a small suite to busy shared spaces.</h2><ol><li><span><Building2 /></span><div><strong>Corporate offices</strong><p>Workstations, boardrooms, kitchens and amenities.</p></div></li><li><span><Store /></span><div><strong>Retail & customer spaces</strong><p>Presentation areas, counters, floors and back rooms.</p></div></li><li><span><Warehouse /></span><div><strong>Commercial facilities</strong><p>Offices, staff rooms and workplace amenities.</p></div></li></ol></div><div className={styles.prepVisual}><Trash2 /><h3>Need a one-off office reset?</h3><p>Book a deeper clean before an event, after a fit-out, during a quiet period or when your workplace needs a fresh start.</p><button onClick={openQuote}>Request a one-off quote</button></div></section>
+
+    <section id="service-areas" className="sydney-section wrap"><div><div className="eyebrow">OUR CITY. YOUR WORKPLACE.</div><h2>Sydney, we’ve got<br />your clean covered.</h2><p>From CBD offices to suburban suites and commercial spaces.<br />A local clean, built around your business.</p><div className="areas">{["Sydney CBD", "North Sydney", "Chatswood", "Parramatta", "Inner West", "Eastern Suburbs", "Macquarie Park", "The Hills District", "Greater Western Sydney", "Canterbury & Bankstown", "Bayside", "Sutherland Shire"].map(area => <span key={area}><MapPin size={14} />{area}</span>)}</div></div><div className="sydney-word" aria-hidden="true"><span>Made for</span>Sydney<Sparkles className="sydney-spark" size={60} /><small>33.8688° S &nbsp; 151.2093° E</small></div></section>
+
+    <section className={styles.faqSection}><div className={styles.faqIntro}><span className={styles.sectionKicker}>Good to know</span><h2>Office cleaning FAQs</h2><p>Quick answers before requesting your workplace proposal.</p><a href="tel:+61401356937"><Phone /> 0401 356 937</a></div><div className={styles.faqList}>{faqs.map(([question, answer]) => <details key={question}><summary>{question}<ChevronDown /></summary><p>{answer}</p></details>)}</div></section>
+
+    <section className={styles.finalCta}><div><span><Clock3 /> Tell us about your workplace</span><h2>A cleaner office.<br />A better start to the day.</h2><p>Request a tailored cleaning plan for your Sydney workplace.</p></div><Action light onClick={openQuote} /></section>
+
+    <footer className="wrap"><div className="footer-top"><Logo /><p>We do clean. You do business.</p><span><MapPin size={15} />Sydney, Australia</span></div><div className="footer-columns"><div><h3>A fresh workplace, every visit.</h3><p>Office, end of lease and home cleaning.<br />Locally based. Thoughtfully done.</p></div><div><h4>OUR SERVICES</h4><Link href="/endofleaseclean">End of lease cleaning</Link><Link href="/officecleaning">Office & commercial</Link>{["Home & regular cleaning", "Deep cleaning", "Carpet & upholstery"].map(item => <button key={item} aria-disabled="true">{item}</button>)}</div><div><h4>WEDO CLEANING</h4>{["Why choose WeDo", "Cleaning checklist", "Sydney service areas", "Get a free quote"].map(item => <button key={item} aria-disabled="true">{item}</button>)}</div></div><div className="footer-bottom"><span>© {new Date().getFullYear()} WeDo Cleaning Services.</span><div><button aria-disabled="true">Privacy policy</button><button aria-disabled="true">Terms of service</button></div></div></footer>
+  </main><QuoteModal open={quoteOpen} onClose={() => setQuoteOpen(false)} defaultService="Commercial Cleaning" /></>;
+}

@@ -150,6 +150,7 @@ export const createBalanceCheckoutSession = action({
         });
         await ctx.runAction(internal.emails.sendBookingPaymentLink, {
           bookingId: prepared.bookingId,
+          bookingReference: prepared.bookingReference,
           customerId: prepared.customerId,
           to: prepared.customerEmail,
           customerFirstName: prepared.customerFirstName,

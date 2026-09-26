@@ -10,6 +10,7 @@ import { sendTransactionalEmail } from "./lib/sendTransactionalEmail";
 export const sendBookingConfirmation = internalAction({
   args: {
     bookingId: v.id("bookings"),
+    bookingReference: v.string(),
     customerId: v.id("customers"),
     to: v.string(),
     customerFirstName: v.string(),
@@ -30,7 +31,7 @@ export const sendBookingConfirmation = internalAction({
   handler: async (ctx, args): Promise<null> => {
     const template = bookingConfirmationEmail({
       customerFirstName: args.customerFirstName,
-      bookingReference: args.bookingId,
+      bookingReference: args.bookingReference,
       serviceName: args.serviceName,
       scheduledDate: args.scheduledDate,
       scheduledTime: args.scheduledTime,
@@ -56,6 +57,7 @@ export const sendBookingConfirmation = internalAction({
 export const sendBookingPaymentLink = internalAction({
   args: {
     bookingId: v.id("bookings"),
+    bookingReference: v.string(),
     customerId: v.id("customers"),
     to: v.string(),
     customerFirstName: v.string(),
@@ -71,7 +73,7 @@ export const sendBookingPaymentLink = internalAction({
   handler: async (ctx, args): Promise<null> => {
     const template = bookingPaymentLinkEmail({
       ...args,
-      bookingReference: args.bookingId,
+      bookingReference: args.bookingReference,
     });
     await sendTransactionalEmail(ctx, {
       type: "BOOKING_PAYMENT_LINK",
@@ -89,6 +91,7 @@ export const sendBookingPaymentLink = internalAction({
 export const sendQuoteRequestReceived = internalAction({
   args: {
     quoteRequestId: v.id("quoteRequests"),
+    quoteReference: v.string(),
     customerId: v.id("customers"),
     to: v.string(),
     customerFirstName: v.string(),
@@ -102,7 +105,7 @@ export const sendQuoteRequestReceived = internalAction({
   handler: async (ctx, args): Promise<null> => {
     const template = quoteRequestReceivedEmail({
       customerFirstName: args.customerFirstName,
-      quoteReference: args.quoteRequestId,
+      quoteReference: args.quoteReference,
       serviceName: args.serviceName,
       requestType: args.requestType,
     });

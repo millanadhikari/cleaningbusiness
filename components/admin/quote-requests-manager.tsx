@@ -100,6 +100,7 @@ export function QuoteRequestsManager() {
         (!term ||
           [
             quote.customerName,
+            quote.reference,
             quote.email,
             quote.serviceType,
             quote.suburb,
@@ -133,7 +134,7 @@ export function QuoteRequestsManager() {
       <AdminListToolbar
         search={search}
         onSearch={setSearch}
-        placeholder="Search customer, service, suburb or email"
+        placeholder="Search reference, customer, service, suburb or email"
       >
         <FilterSelect
           label="Status"
@@ -191,7 +192,7 @@ export function QuoteRequestsManager() {
                     <TableCell>
                       <PersonCell
                         name={quote.customerName}
-                        detail={quote.email}
+                        detail={`${quote.reference ?? "Reference pending"}${quote.email ? ` · ${quote.email}` : ""}`}
                       />
                     </TableCell>
                     <TableCell>

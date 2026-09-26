@@ -71,10 +71,11 @@ export function BookingsManager() {
         (!term ||
           [
             booking.customerName,
+            booking.reference,
             booking.serviceName,
             booking.suburb,
             booking.scheduledDate,
-          ].some((value) => value.toLowerCase().includes(term))),
+          ].some((value) => value?.toLowerCase().includes(term))),
     );
   }, [bookings, payment, search, status]);
   const currentPage = Math.min(
@@ -97,7 +98,7 @@ export function BookingsManager() {
       <AdminListToolbar
         search={search}
         onSearch={setSearch}
-        placeholder="Search customer, service, suburb or date"
+        placeholder="Search reference, customer, service, suburb or date"
       >
         <FilterSelect
           label="Booking status"
@@ -151,7 +152,7 @@ export function BookingsManager() {
                     <TableCell>
                       <PersonCell
                         name={booking.customerName}
-                        detail={booking.suburb}
+                        detail={`${booking.reference ?? "Reference pending"} · ${booking.suburb}`}
                       />
                     </TableCell>
                     <TableCell className="min-w-44 font-medium text-slate-800">

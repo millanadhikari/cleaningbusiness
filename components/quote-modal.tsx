@@ -209,6 +209,7 @@ export function QuoteModal({
   const [agreed, setAgreed] = useState(false);
   const [complete, setComplete] = useState(false);
   const [bookingId, setBookingId] = useState<Id<"bookings"> | null>(null);
+  const [workReference, setWorkReference] = useState<string | null>(null);
   const bookingSubmissionKey = useRef<string | null>(null);
   const quoteSubmissionKey = useRef<string | null>(null);
 
@@ -396,11 +397,12 @@ export function QuoteModal({
     setError(null);
     try {
       quoteSubmissionKey.current ??= crypto.randomUUID();
-      await submitQuote({
+      const result = await submitQuote({
         ...requestPayload(),
         submissionKey: quoteSubmissionKey.current,
         requestType: intent,
       });
+      setWorkReference(result.reference);
       setComplete(true);
     } catch {
       setError(
@@ -426,7 +428,7 @@ export function QuoteModal({
       let createdId = bookingId;
       if (!createdId) {
         bookingSubmissionKey.current ??= crypto.randomUUID();
-        createdId = await createBooking({
+        const result = await createBooking({
           submissionKey: bookingSubmissionKey.current,
           firstName: payload.firstName,
           lastName: payload.lastName,
@@ -443,7 +445,9 @@ export function QuoteModal({
           paymentOption,
           notes: payload.notes,
         });
-        setBookingId(createdId);
+        createdId = result.bookingId;
+        setBookingId(result.bookingId);
+        setWorkReference(result.reference);
       }
       if (paymentOption === "PAY_LATER") {
         setComplete(true);
@@ -702,6 +706,7 @@ export function QuoteModal({
                   setPaymentOption={(value) => {
                     setPaymentOption(value);
                     setBookingId(null);
+                    setWorkReference(null);
                   }}
                 />
               ) : null}
@@ -847,6 +852,7 @@ export function QuoteModal({
             intent={intent}
             estimate={estimate}
             bookingId={bookingId}
+            reference={workReference}
             serviceName={selectedService?.name ?? "Cleaning service"}
             date={formattedDate}
             time={formatTime(scheduledTime)}
@@ -1817,6 +1823,7 @@ function Confirmation({
   intent,
   estimate,
   bookingId,
+  reference,
   serviceName,
   date,
   time,
@@ -1826,6 +1833,7 @@ function Confirmation({
   intent: FlowIntent | null;
   estimate: EstimateResult | null;
   bookingId: Id<"bookings"> | null;
+  reference: string | null;
   serviceName: string;
   date: string;
   time: string;
@@ -1864,15 +1872,20 @@ function Confirmation({
           <p>
             Payment: <strong>Due later</strong>
           </p>
-          <p className={styles.bookingReference}>Reference: {bookingId}</p>
+          <p className={styles.bookingReference}>Reference: {reference}</p>
           <small>We’ll contact you if any further booking details are needed.</small>
         </div>
       ) : (
-        <p>
-          {intent === "CALLBACK_REQUEST"
-            ? "We’ll call you using the phone number provided."
-            : "We’ll review your requirements and confirm the next step."}
-        </p>
+        <div>
+          <p>
+            {intent === "CALLBACK_REQUEST"
+              ? "We’ll call you using the phone number provided."
+              : "We’ll review your requirements and confirm the next step."}
+          </p>
+          {reference ? (
+            <p className={styles.bookingReference}>Reference: {reference}</p>
+          ) : null}
+        </div>
       )}
       <button type="button" onClick={onClose}>
         Done

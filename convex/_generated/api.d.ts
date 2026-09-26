@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as adminInvitations from "../adminInvitations.js";
 import type * as blogs from "../blogs.js";
 import type * as bookings from "../bookings.js";
 import type * as bootstrap from "../bootstrap.js";
@@ -19,7 +20,9 @@ import type * as emails from "../emails.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_sendTransactionalEmail from "../lib/sendTransactionalEmail.js";
+import type * as lib_workReferences from "../lib/workReferences.js";
 import type * as quoteRequests from "../quoteRequests.js";
+import type * as references from "../references.js";
 import type * as services from "../services.js";
 import type * as stripeData from "../stripeData.js";
 import type * as stripePayments from "../stripePayments.js";
@@ -32,6 +35,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  adminInvitations: typeof adminInvitations;
   blogs: typeof blogs;
   bookings: typeof bookings;
   bootstrap: typeof bootstrap;
@@ -43,7 +47,9 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   "lib/auth": typeof lib_auth;
   "lib/sendTransactionalEmail": typeof lib_sendTransactionalEmail;
+  "lib/workReferences": typeof lib_workReferences;
   quoteRequests: typeof quoteRequests;
+  references: typeof references;
   services: typeof services;
   stripeData: typeof stripeData;
   stripePayments: typeof stripePayments;

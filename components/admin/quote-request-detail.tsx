@@ -227,7 +227,8 @@ export function QuoteRequestDetail({
             ) : null}
           </div>
           <p className="mt-2 text-sm text-slate-500">
-            Submitted {formatDate(quote.createdAt, true)}
+            Reference {quote.reference ?? "Pending"} · Submitted{" "}
+            {formatDate(quote.createdAt, true)}
           </p>
         </div>
         <div className="flex flex-col items-stretch gap-3 sm:items-end">

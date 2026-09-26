@@ -7,6 +7,8 @@ export function ConfiguredAuthProviders({ children }: { children: ReactNode }) {
     <ClerkProvider
       signInUrl="/sign-in"
       signInFallbackRedirectUrl="/admin"
+      signUpUrl="/accept-invitation"
+      signUpFallbackRedirectUrl="/admin-invitation-complete"
       afterSignOutUrl="/sign-in"
     >
       <ConvexClientProvider>{children}</ConvexClientProvider>

@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { mutation, query } from "./_generated/server";
 import { requireRole } from "./lib/auth";
+import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
 
 const answerValue = v.union(
@@ -123,7 +124,10 @@ export const createWebsiteBooking = mutation({
     paymentOption,
     notes: v.optional(v.string()),
   },
-  returns: v.id("bookings"),
+  returns: v.object({
+    bookingId: v.id("bookings"),
+    reference: v.string(),
+  }),
   handler: async (ctx, args) => {
     const submissionKey = args.submissionKey.trim();
     if (!/^[0-9a-f-]{36}$/i.test(submissionKey)) {
@@ -135,7 +139,17 @@ export const createWebsiteBooking = mutation({
         index.eq("submissionKey", submissionKey),
       )
       .unique();
-    if (existingSubmission) return existingSubmission._id;
+    if (existingSubmission) {
+      const reference =
+        existingSubmission.reference ?? (await allocateWorkReference(ctx));
+      if (!existingSubmission.reference) {
+        await ctx.db.patch(existingSubmission._id, { reference });
+        if (existingSubmission.quoteRequestId) {
+          await ctx.db.patch(existingSubmission.quoteRequestId, { reference });
+        }
+      }
+      return { bookingId: existingSubmission._id, reference };
+    }
 
     const service = await ctx.db.get(args.serviceId);
     if (!service || service.status !== "ACTIVE")
@@ -257,7 +271,9 @@ export const createWebsiteBooking = mutation({
 
     const isPayLater = args.paymentOption === "PAY_LATER";
     const paymentStatus = "UNPAID" as const;
+    const reference = await allocateWorkReference(ctx);
     const bookingId = await ctx.db.insert("bookings", {
+      reference,
       submissionKey,
       customerId,
       serviceId: service._id,
@@ -285,6 +301,7 @@ export const createWebsiteBooking = mutation({
     });
 
     const quoteRequestId = await ctx.db.insert("quoteRequests", {
+      reference,
       submissionKey,
       customerId,
       serviceId: service._id,
@@ -327,6 +344,7 @@ export const createWebsiteBooking = mutation({
     if (isPayLater && confirmationEmail) {
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingConfirmation, {
         bookingId,
+        bookingReference: reference,
         customerId,
         to: confirmationEmail,
         customerFirstName: firstName,
@@ -347,7 +365,7 @@ export const createWebsiteBooking = mutation({
       });
     }
 
-    return bookingId;
+    return { bookingId, reference };
   },
 });
 

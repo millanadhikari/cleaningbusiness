@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server';
+import { internalMutation, internalQuery, mutation, query } from './_generated/server';
 import { requireSuperAdmin, requireUser } from './lib/auth';
 
 const userRole = v.union(v.literal('SUPER_ADMIN'), v.literal('ADMIN'));
@@ -53,6 +53,128 @@ export const listInternalUsers = query({
       status: user.status,
       createdAt: user.createdAt,
     }));
+  },
+});
+
+export const assertCanInviteAdmin = internalQuery({
+  args: { email: v.string() },
+  returns: v.id('users'),
+  handler: async (ctx, args) => {
+    const superAdmin = await requireSuperAdmin(ctx);
+    const existingUser = await ctx.db
+      .query('users')
+      .withIndex('by_email', (index) => index.eq('email', args.email))
+      .unique();
+
+    if (existingUser) {
+      throw new Error('An internal user already uses that email address.');
+    }
+
+    return superAdmin._id;
+  },
+});
+
+export const recordAdminInvitation = internalMutation({
+  args: {
+    email: v.string(),
+    clerkInvitationId: v.string(),
+    invitedByUserId: v.id('users'),
+    expiresAt: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const existingInvitation = await ctx.db
+      .query('adminInvitations')
+      .withIndex('by_email', (index) => index.eq('email', args.email))
+      .unique();
+    const now = Date.now();
+
+    if (existingInvitation) {
+      await ctx.db.patch(existingInvitation._id, {
+        clerkInvitationId: args.clerkInvitationId,
+        invitedByUserId: args.invitedByUserId,
+        status: 'PENDING',
+        expiresAt: args.expiresAt,
+        acceptedAt: undefined,
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert('adminInvitations', {
+        ...args,
+        status: 'PENDING',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    return null;
+  },
+});
+
+export const provisionInvitedAdmin = internalMutation({
+  args: {
+    clerkUserId: v.string(),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
+    email: v.string(),
+  },
+  returns: v.id('users'),
+  handler: async (ctx, args) => {
+    const existingUser = await ctx.db
+      .query('users')
+      .withIndex('by_clerk_user_id', (index) =>
+        index.eq('clerkUserId', args.clerkUserId),
+      )
+      .unique();
+
+    if (existingUser) {
+      if (existingUser.status !== 'ACTIVE') {
+        throw new Error('This admin account is inactive. Contact a Super Admin.');
+      }
+      return existingUser._id;
+    }
+
+    const invitation = await ctx.db
+      .query('adminInvitations')
+      .withIndex('by_email', (index) => index.eq('email', args.email))
+      .unique();
+
+    if (!invitation || invitation.status !== 'PENDING') {
+      throw new Error('No pending admin invitation was found for this email.');
+    }
+
+    if (invitation.expiresAt < Date.now()) {
+      throw new Error('This admin invitation has expired. Ask a Super Admin to send a new one.');
+    }
+
+    const existingEmailUser = await ctx.db
+      .query('users')
+      .withIndex('by_email', (index) => index.eq('email', args.email))
+      .unique();
+
+    if (existingEmailUser) {
+      throw new Error('An internal user already uses this email address.');
+    }
+
+    const now = Date.now();
+    const userId = await ctx.db.insert('users', {
+      clerkUserId: args.clerkUserId,
+      firstName: args.firstName,
+      lastName: args.lastName,
+      email: args.email,
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.db.patch(invitation._id, {
+      status: 'ACCEPTED',
+      acceptedAt: now,
+      updatedAt: now,
+    });
+
+    return userId;
   },
 });
 

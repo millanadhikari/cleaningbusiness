@@ -33,6 +33,7 @@ export const prepareCheckout = internalQuery({
 
     return {
       bookingId: booking._id,
+      bookingReference: booking.reference ?? String(booking._id),
       customerId: customer._id,
       customerEmail: customer.email,
       serviceName: service.name,
@@ -202,6 +203,7 @@ export const prepareBalanceCheckout = internalMutation({
       alreadySent: Boolean(existing?.sentAt),
       staleSessionIds,
       bookingId: booking._id,
+      bookingReference: booking.reference ?? String(booking._id),
       customerId: customer._id,
       customerEmail: customer.email,
       customerFirstName: customer.firstName,
@@ -386,6 +388,7 @@ export const processCheckoutEvent = internalMutation({
             internal.emails.sendBookingConfirmation,
             {
               bookingId: booking._id,
+              bookingReference: booking.reference ?? String(booking._id),
               customerId: booking.customerId,
               to: customer.email,
               customerFirstName: customer.firstName,

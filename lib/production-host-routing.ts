@@ -26,6 +26,18 @@ export function getProductionRedirectUrl(requestUrl: URL): URL | null {
     return null;
   }
 
+  const isBookingResult =
+    matchesRoutePrefix(pathname, '/booking/success') ||
+    (pathname === '/' && requestUrl.searchParams.has('checkout'));
+
+  if (isBookingResult) {
+    const redirectUrl = new URL(requestUrl);
+    redirectUrl.protocol = 'https:';
+    redirectUrl.hostname = PUBLIC_PRODUCTION_HOST;
+    redirectUrl.port = '';
+    return redirectUrl;
+  }
+
   const isAppRoute = APP_ROUTE_PREFIXES.some((prefix) =>
     matchesRoutePrefix(pathname, prefix),
   );

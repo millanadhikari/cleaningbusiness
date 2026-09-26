@@ -380,7 +380,7 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
             </h2>
             <p className={styles.reference}>
               {booking.service?.name ?? "Unknown service"} · Reference{" "}
-              {booking._id}
+              {booking.reference ?? "Pending"}
             </p>
           </div>
           <div className={styles.scheduleSummary}>

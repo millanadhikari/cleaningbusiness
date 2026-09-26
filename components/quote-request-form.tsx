@@ -42,6 +42,7 @@ export function QuoteRequestForm() {
   const submissionKey = useRef<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
+  const [reference, setReference] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -67,7 +68,7 @@ export function QuoteRequestForm() {
 
     try {
       submissionKey.current ??= crypto.randomUUID();
-      await submitQuote({
+      const result = await submitQuote({
         submissionKey: submissionKey.current,
         firstName: String(formData.get('firstName') ?? ''),
         lastName: optionalString(formData, 'lastName'),
@@ -86,6 +87,7 @@ export function QuoteRequestForm() {
         preferredTime: optionalString(formData, 'preferredTime'),
         notes: optionalString(formData, 'notes'),
       });
+      setReference(result.reference);
       setIsComplete(true);
       form.reset();
     } catch (submissionError) {
@@ -115,11 +117,23 @@ export function QuoteRequestForm() {
           Our team will review the details and contact you to confirm the scope,
           availability and next steps.
         </p>
+        {reference ? (
+          <p className="mt-4 rounded-full bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800">
+            Reference: {reference}
+          </p>
+        ) : null}
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
           <Button asChild>
             <Link href="/">Return to home</Link>
           </Button>
-          <Button type="button" variant="outline" onClick={() => setIsComplete(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setReference(null);
+              setIsComplete(false);
+            }}
+          >
             Submit another request
           </Button>
         </div>

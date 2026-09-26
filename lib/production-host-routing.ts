@@ -1,7 +1,13 @@
 const PUBLIC_PRODUCTION_HOST = 'www.wedocleaning.com.au';
 const APP_PRODUCTION_HOST = 'app.wedocleaning.com.au';
 
-const APP_ROUTE_PREFIXES = ['/admin', '/sign-in', '/__clerk'];
+const APP_ROUTE_PREFIXES = [
+  '/admin',
+  '/sign-in',
+  '/accept-invitation',
+  '/admin-invitation-complete',
+  '/__clerk',
+];
 
 function matchesRoutePrefix(pathname: string, prefix: string) {
   return pathname === prefix || pathname.startsWith(`${prefix}/`);

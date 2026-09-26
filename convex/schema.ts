@@ -11,7 +11,21 @@ export default defineSchema({
     status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_clerk_user_id", ["clerkUserId"]),
+  })
+    .index("by_clerk_user_id", ["clerkUserId"])
+    .index("by_email", ["email"]),
+  adminInvitations: defineTable({
+    email: v.string(),
+    clerkInvitationId: v.string(),
+    invitedByUserId: v.id("users"),
+    status: v.union(v.literal("PENDING"), v.literal("ACCEPTED")),
+    expiresAt: v.number(),
+    acceptedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_email", ["email"])
+    .index("by_status", ["status"]),
   customers: defineTable({
     firstName: v.string(),
     lastName: v.optional(v.string()),
@@ -36,6 +50,7 @@ export default defineSchema({
     .index("by_phone", ["phone"])
     .index("by_created_at", ["createdAt"]),
   quoteRequests: defineTable({
+    reference: v.optional(v.string()),
     submissionKey: v.optional(v.string()),
     customerId: v.id("customers"),
     serviceId: v.optional(v.id("services")),
@@ -99,11 +114,13 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_reference", ["reference"])
     .index("by_submission_key", ["submissionKey"])
     .index("by_status", ["status"])
     .index("by_customer", ["customerId"])
     .index("by_created_at", ["createdAt"]),
   bookings: defineTable({
+    reference: v.optional(v.string()),
     submissionKey: v.optional(v.string()),
     customerId: v.id("customers"),
     serviceId: v.id("services"),
@@ -169,6 +186,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_reference", ["reference"])
     .index("by_submission_key", ["submissionKey"])
     .index("by_customer", ["customerId"])
     .index("by_status", ["status"])
@@ -176,6 +194,10 @@ export default defineSchema({
     .index("by_stripe_checkout_session_id", ["stripeCheckoutSessionId"])
     .index("by_scheduled_date", ["scheduledDate"])
     .index("by_created_at", ["createdAt"]),
+  referenceCounters: defineTable({
+    name: v.string(),
+    currentValue: v.number(),
+  }).index("by_name", ["name"]),
   stripeEvents: defineTable({
     eventId: v.string(),
     eventType: v.string(),

@@ -1,7 +1,7 @@
 'use client';
 
-import { useConvexAuth, useMutation, useQuery } from 'convex/react';
-import { LoaderCircle, Plus, ShieldCheck } from 'lucide-react';
+import { useAction, useConvexAuth, useMutation, useQuery } from 'convex/react';
+import { LoaderCircle, MailPlus, ShieldCheck } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -26,37 +26,41 @@ export function AdminUsersManager() {
     api.users.listInternalUsers,
     isAuthenticated ? {} : 'skip',
   );
-  const createAdmin = useMutation(api.users.createAdmin);
+  const inviteAdmin = useAction(api.adminInvitations.inviteAdmin);
   const setAdminStatus = useMutation(api.users.setAdminStatus);
-  const [isCreating, setIsCreating] = useState(false);
+  const [isInviting, setIsInviting] = useState(false);
   const [updatingUserId, setUpdatingUserId] = useState<Id<'users'> | null>(null);
   const [message, setMessage] = useState<FormMessage>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
-  async function handleCreateAdmin(event: FormEvent<HTMLFormElement>) {
+  async function handleInviteAdmin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage(null);
-    setIsCreating(true);
+    setIsInviting(true);
 
     const form = event.currentTarget;
     const formData = new FormData(form);
 
     try {
-      await createAdmin({
-        clerkUserId: String(formData.get('clerkUserId') ?? ''),
-        firstName: String(formData.get('firstName') ?? '') || undefined,
-        lastName: String(formData.get('lastName') ?? '') || undefined,
-        email: String(formData.get('email') ?? '') || undefined,
+      const result = await inviteAdmin({
+        email: String(formData.get('email') ?? ''),
+        appOrigin: window.location.origin,
       });
       form.reset();
-      setMessage({ kind: 'success', text: 'Admin account added successfully.' });
+      setMessage({
+        kind: 'success',
+        text: `Invitation sent to ${result.email}.`,
+      });
     } catch (error) {
       setMessage({
         kind: 'error',
-        text: error instanceof Error ? error.message : 'Unable to add the admin.',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Unable to send the invitation.',
       });
     } finally {
-      setIsCreating(false);
+      setIsInviting(false);
     }
   }
 
@@ -85,51 +89,41 @@ export function AdminUsersManager() {
       <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 text-emerald-950">
         <ShieldCheck className="mt-0.5 size-5 shrink-0 text-emerald-700" />
         <p className="text-sm leading-6">
-          Register staff who already have a Clerk account, then control whether
-          they can access the internal application.
+          Invite staff by email, then control whether they can access the
+          internal application after they accept.
         </p>
       </div>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="mb-6">
-          <h2 className="text-lg font-semibold text-slate-950">Add an admin</h2>
+          <h2 className="text-lg font-semibold text-slate-950">Invite an admin</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Create the staff account in Clerk first, then paste its user ID here.
+            They will receive a secure Clerk invitation and create their own
+            account.
           </p>
         </div>
 
-        <form onSubmit={handleCreateAdmin} className="grid gap-5 md:grid-cols-2">
+        <form onSubmit={handleInviteAdmin} className="grid gap-5 md:grid-cols-2">
           <div className="space-y-2 md:col-span-2">
-            <Label htmlFor="clerkUserId">Clerk user ID</Label>
+            <Label htmlFor="email">Email</Label>
             <Input
-              id="clerkUserId"
-              name="clerkUserId"
-              placeholder="user_..."
-              autoComplete="off"
+              id="email"
+              name="email"
+              type="email"
+              placeholder="admin@example.com"
+              autoComplete="email"
               required
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="firstName">First name</Label>
-            <Input id="firstName" name="firstName" autoComplete="given-name" />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="lastName">Last name</Label>
-            <Input id="lastName" name="lastName" autoComplete="family-name" />
-          </div>
-          <div className="space-y-2 md:col-span-2">
-            <Label htmlFor="email">Email</Label>
-            <Input id="email" name="email" type="email" autoComplete="email" />
-          </div>
 
           <div className="flex flex-col gap-3 md:col-span-2 sm:flex-row sm:items-center">
-            <Button type="submit" disabled={isCreating}>
-              {isCreating ? (
+            <Button type="submit" disabled={isInviting}>
+              {isInviting ? (
                 <LoaderCircle className="animate-spin" />
               ) : (
-                <Plus />
+                <MailPlus />
               )}
-              Add admin
+              Send invitation
             </Button>
             {message ? (
               <p

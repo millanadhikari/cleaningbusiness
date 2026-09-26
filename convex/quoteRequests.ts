@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireRole } from "./lib/auth";
+import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
 
 const quoteStatus = v.union(
@@ -328,7 +329,10 @@ export const submit = mutation({
     notes: v.optional(v.string()),
     requestType: v.optional(requestType),
   },
-  returns: v.id("quoteRequests"),
+  returns: v.object({
+    quoteRequestId: v.id("quoteRequests"),
+    reference: v.string(),
+  }),
   handler: async (ctx, args) => {
     const submissionKey = args.submissionKey.trim();
     if (!/^[0-9a-f-]{36}$/i.test(submissionKey)) {
@@ -340,7 +344,14 @@ export const submit = mutation({
         index.eq("submissionKey", submissionKey),
       )
       .unique();
-    if (existingSubmission) return existingSubmission._id;
+    if (existingSubmission) {
+      const reference =
+        existingSubmission.reference ?? (await allocateWorkReference(ctx));
+      if (!existingSubmission.reference) {
+        await ctx.db.patch(existingSubmission._id, { reference });
+      }
+      return { quoteRequestId: existingSubmission._id, reference };
+    }
 
     const firstName = requiredText(args.firstName, "First name", 80);
     const lastName = optionalText(args.lastName, "Last name", 80);
@@ -470,7 +481,9 @@ export const submit = mutation({
       (estimateSnapshot?.type === "CUSTOM_QUOTE_REQUIRED"
         ? ("CUSTOM_QUOTE" as const)
         : ("CALLBACK_REQUEST" as const));
+    const reference = await allocateWorkReference(ctx);
     const quoteRequestId = await ctx.db.insert("quoteRequests", {
+      reference,
       submissionKey,
       customerId,
       serviceId: args.serviceId,
@@ -526,6 +539,7 @@ export const submit = mutation({
         internal.emails.sendQuoteRequestReceived,
         {
           quoteRequestId,
+          quoteReference: reference,
           customerId,
           to: email,
           customerFirstName: firstName,
@@ -535,7 +549,7 @@ export const submit = mutation({
       );
     }
 
-    return quoteRequestId;
+    return { quoteRequestId, reference };
   },
 });
 
@@ -578,7 +592,9 @@ export const createAdminQuote = mutation({
         updatedAt: now,
       });
     }
+    const reference = await allocateWorkReference(ctx);
     return ctx.db.insert("quoteRequests", {
+      reference,
       customerId,
       source: "ADMIN",
       ...prepared.quote,
@@ -670,7 +686,9 @@ export const convertAcceptedQuoteToBooking = mutation({
     if (!service) throw new Error("The selected service no longer exists.");
 
     const now = Date.now();
+    const reference = quote.reference ?? (await allocateWorkReference(ctx));
     const bookingId = await ctx.db.insert("bookings", {
+      reference,
       customerId: quote.customerId,
       serviceId: quote.serviceId,
       quoteRequestId: quote._id,
@@ -698,12 +716,14 @@ export const convertAcceptedQuoteToBooking = mutation({
       updatedAt: now,
     });
     await ctx.db.patch(quote._id, {
+      reference,
       convertedBookingId: bookingId,
       updatedAt: now,
     });
     if (customer?.email) {
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingConfirmation, {
         bookingId,
+        bookingReference: reference,
         customerId: customer._id,
         to: customer.email,
         customerFirstName: customer.firstName,
@@ -749,6 +769,7 @@ export const list = query({
         const customer = await ctx.db.get(quote.customerId);
         return {
           _id: quote._id,
+          reference: quote.reference,
           customerName: customer
             ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
             : "Unknown customer",

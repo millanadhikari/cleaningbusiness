@@ -1,14 +1,17 @@
 "use client";
 
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
+  Banknote,
   CalendarCheck,
+  CreditCard,
   LoaderCircle,
   Mail,
   MapPin,
   Pencil,
   Phone,
+  Send,
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
@@ -17,6 +20,9 @@ import { useState } from "react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -106,10 +112,25 @@ export function QuoteRequestDetail({
   const convertQuote = useMutation(
     api.quoteRequests.convertAcceptedQuoteToBooking,
   );
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [activeAction, setActiveAction] = useState<"delete" | "convert" | null>(
-    null,
+  const recordManualPayment = useMutation(
+    api.quoteRequests.recordManualPaymentAndConvert,
   );
+  const sendQuotePaymentLink = useAction(
+    api.stripePayments.createQuoteCheckoutSession,
+  );
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [activeAction, setActiveAction] = useState<
+    "delete" | "convert" | "payment-link" | "manual-payment" | null
+  >(null);
+  const [paymentOption, setPaymentOption] = useState<"DEPOSIT" | "FULL">(
+    "FULL",
+  );
+  const [manualMethod, setManualMethod] = useState<
+    "BANK_TRANSFER" | "CASH"
+  >("BANK_TRANSFER");
+  const [manualReference, setManualReference] = useState("");
+  const [manualNote, setManualNote] = useState("");
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleStatusChange(status: QuoteStatus) {
@@ -160,6 +181,51 @@ export function QuoteRequestDetail({
     }
   }
 
+  async function handleSendPaymentLink() {
+    setActiveAction("payment-link");
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const result = await sendQuotePaymentLink({
+        quoteRequestId,
+        paymentOption,
+        requestKey: crypto.randomUUID(),
+      });
+      setSuccessMessage(`Payment link sent to ${result.sentTo}.`);
+    } catch (actionError) {
+      setError(
+        actionError instanceof Error
+          ? actionError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to send the payment link.",
+      );
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
+  async function handleManualPayment() {
+    setActiveAction("manual-payment");
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const bookingId = await recordManualPayment({
+        quoteRequestId,
+        paymentOption,
+        paymentMethod: manualMethod,
+        reference: manualReference.trim() || undefined,
+        note: manualNote.trim() || undefined,
+      });
+      router.push(`/admin/bookings/${bookingId}`);
+    } catch (actionError) {
+      setError(
+        actionError instanceof Error
+          ? actionError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to record the payment and create the booking.",
+      );
+      setActiveAction(null);
+    }
+  }
+
   if (quote === undefined) {
     return (
       <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
@@ -202,6 +268,31 @@ export function QuoteRequestDetail({
   ]
     .filter(Boolean)
     .join(", ");
+  const canTakeDeposit = Boolean(
+    quote.service?.depositType && quote.service.depositValue !== undefined,
+  );
+  const depositAmountCents =
+    quote.estimatedTotalCents !== undefined && canTakeDeposit
+      ? quote.service!.depositType === "FIXED"
+        ? Math.min(quote.estimatedTotalCents, quote.service!.depositValue!)
+        : Math.min(
+            quote.estimatedTotalCents,
+            Math.max(
+              1,
+              Math.round(
+                (quote.estimatedTotalCents * quote.service!.depositValue!) /
+                  10_000,
+              ),
+            ),
+          )
+      : undefined;
+  const selectedPaymentAmount =
+    paymentOption === "DEPOSIT"
+      ? depositAmountCents
+      : quote.estimatedTotalCents;
+  const paidQuotePayment = quote.payments.find(
+    (payment) => payment.status === "PAID",
+  );
 
   return (
     <div className="space-y-6">
@@ -218,6 +309,14 @@ export function QuoteRequestDetail({
               {customerName}
             </h2>
             <QuoteStatusBadge status={quote.status} />
+            {paidQuotePayment ? (
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                {paidQuotePayment.paymentOption === "DEPOSIT"
+                  ? "Deposit paid"
+                  : "Paid in full"}{" "}
+                · {formatMoney(paidQuotePayment.amountCents)}
+              </span>
+            ) : null}
             {quote.requestType ? (
               <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800">
                 {quote.requestType === "CALLBACK_REQUEST"
@@ -276,7 +375,7 @@ export function QuoteRequestDetail({
                 ) : (
                   <CalendarCheck />
                 )}{" "}
-                Convert to booking
+                Create unpaid booking
               </Button>
             )}
             {quote.convertedBookingId ? (
@@ -331,10 +430,255 @@ export function QuoteRequestDetail({
               {error}
             </p>
           ) : null}
+          {successMessage ? (
+            <p className="max-w-md text-right text-xs font-medium text-emerald-700">
+              {successMessage}
+            </p>
+          ) : null}
         </div>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
+        {quote.convertedBookingId && quote.payments.length ? (
+          <Card className="gap-5 border-emerald-200 bg-emerald-50/30 shadow-sm lg:col-span-3">
+            <CardHeader>
+              <CardTitle className="text-base">Payment received</CardTitle>
+              <CardDescription>
+                The online payment was confirmed and this quote was converted
+                into a booking.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {quote.payments.map((payment) => (
+                <div
+                  key={payment._id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm"
+                >
+                  <div>
+                    <strong className="text-slate-900">
+                      {payment.paymentOption === "DEPOSIT"
+                        ? "Deposit"
+                        : "Full payment"}{" "}
+                      · {formatMoney(payment.amountCents)}
+                    </strong>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {payment.status === "PAID"
+                        ? `Stripe payment confirmed ${formatDate(payment.paidAt, true)}`
+                        : payment.sentTo
+                          ? `Sent to ${payment.sentTo}`
+                          : "Checkout payment request"}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+                    {payment.status.charAt(0) +
+                      payment.status.slice(1).toLowerCase()}
+                  </span>
+                </div>
+              ))}
+              <Button asChild size="sm">
+                <Link href={`/admin/bookings/${quote.convertedBookingId}`}>
+                  <CalendarCheck /> View synchronized booking
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {quote.status === "ACCEPTED" &&
+        !quote.convertedBookingId &&
+        quote.estimatedTotalCents !== undefined ? (
+          <Card className="gap-5 border-emerald-200 shadow-sm lg:col-span-3">
+            <CardHeader>
+              <CardTitle className="text-base">Payment and booking</CardTitle>
+              <CardDescription>
+                Send a secure Stripe payment link, or record a bank transfer or
+                cash payment. A confirmed payment creates the booking and starts
+                the booking workflow automatically.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-2 sm:items-end">
+                <label className="space-y-2 text-sm font-medium text-slate-700">
+                  <span>Payment amount</span>
+                  <NativeSelect
+                    value={paymentOption}
+                    onChange={(event) =>
+                      setPaymentOption(
+                        event.target.value as "DEPOSIT" | "FULL",
+                      )
+                    }
+                  >
+                    {canTakeDeposit ? (
+                      <option value="DEPOSIT">
+                        Deposit
+                        {depositAmountCents === undefined
+                          ? ""
+                          : ` — ${formatMoney(depositAmountCents)}`}
+                      </option>
+                    ) : null}
+                    <option value="FULL">
+                      Full amount — {formatMoney(quote.estimatedTotalCents)}
+                    </option>
+                  </NativeSelect>
+                </label>
+                <div className="rounded-lg bg-white px-4 py-3 ring-1 ring-slate-200">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Amount to record
+                  </span>
+                  <strong className="mt-1 block text-xl text-slate-950">
+                    {selectedPaymentAmount === undefined
+                      ? "Not configured"
+                      : formatMoney(selectedPaymentAmount)}
+                  </strong>
+                </div>
+              </div>
+
+              {!quote.preferredDate || !quote.preferredTime ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Add a scheduled date and time to the quote before collecting
+                  payment and creating its booking.
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-5">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="size-5 text-sky-800" />
+                    <h3 className="font-semibold text-sky-950">
+                      Online payment
+                    </h3>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-sky-900/75">
+                    Email a Stripe-hosted checkout link to the customer. The
+                    signed webhook creates and confirms the booking after
+                    payment succeeds.
+                  </p>
+                  <Button
+                    type="button"
+                    className="mt-4"
+                    onClick={handleSendPaymentLink}
+                    disabled={
+                      activeAction !== null ||
+                      !quote.customer?.email ||
+                      !quote.preferredDate ||
+                      !quote.preferredTime ||
+                      selectedPaymentAmount === undefined
+                    }
+                  >
+                    {activeAction === "payment-link" ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Send />
+                    )}
+                    {activeAction === "payment-link"
+                      ? "Sending…"
+                      : "Send payment link"}
+                  </Button>
+                  {!quote.customer?.email ? (
+                    <p className="mt-2 text-xs text-amber-800">
+                      Add a customer email before sending a link.
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-5">
+                  <div className="flex items-center gap-2">
+                    <Banknote className="size-5 text-emerald-800" />
+                    <h3 className="font-semibold text-emerald-950">
+                      Bank transfer or cash
+                    </h3>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-emerald-900/75">
+                    Record an offline payment and create the confirmed booking
+                    in one step.
+                  </p>
+                  <div className="mt-4 grid gap-3">
+                    <NativeSelect
+                      value={manualMethod}
+                      onChange={(event) =>
+                        setManualMethod(
+                          event.target.value as "BANK_TRANSFER" | "CASH",
+                        )
+                      }
+                      aria-label="Manual payment method"
+                    >
+                      <option value="BANK_TRANSFER">Bank transfer</option>
+                      <option value="CASH">Cash</option>
+                    </NativeSelect>
+                    <Input
+                      value={manualReference}
+                      onChange={(event) => setManualReference(event.target.value)}
+                      placeholder="Payment reference (optional)"
+                      maxLength={160}
+                    />
+                    <Textarea
+                      value={manualNote}
+                      onChange={(event) => setManualNote(event.target.value)}
+                      placeholder="Payment note (optional)"
+                      rows={2}
+                      maxLength={1000}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleManualPayment}
+                      disabled={
+                        activeAction !== null ||
+                        !quote.preferredDate ||
+                        !quote.preferredTime ||
+                        selectedPaymentAmount === undefined
+                      }
+                    >
+                      {activeAction === "manual-payment" ? (
+                        <LoaderCircle className="animate-spin" />
+                      ) : (
+                        <CalendarCheck />
+                      )}
+                      {activeAction === "manual-payment"
+                        ? "Recording…"
+                        : "Record payment and create booking"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {quote.payments.length ? (
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    Online payment requests
+                  </h3>
+                  <div className="mt-3 space-y-2">
+                    {quote.payments.map((payment) => (
+                      <div
+                        key={payment._id}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                      >
+                        <div>
+                          <strong className="text-slate-900">
+                            {payment.paymentOption === "DEPOSIT"
+                              ? "Deposit"
+                              : "Full payment"}{" "}
+                            · {formatMoney(payment.amountCents)}
+                          </strong>
+                          <p className="mt-0.5 text-xs text-slate-500">
+                            {payment.sentTo
+                              ? `Sent to ${payment.sentTo}`
+                              : "Checkout link preparation"}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                          {payment.status.charAt(0) +
+                            payment.status.slice(1).toLowerCase()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card className="gap-5 border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle className="text-base">Customer</CardTitle>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addDays, format, parseISO } from "date-fns";
 import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import {
@@ -212,6 +212,40 @@ export function QuoteModal({
   const [workReference, setWorkReference] = useState<string | null>(null);
   const bookingSubmissionKey = useRef<string | null>(null);
   const quoteSubmissionKey = useRef<string | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const resetCompletedForm = useCallback(() => {
+    setStep(1);
+    setServiceId(undefined);
+    setAnswers({});
+    setEstimate(null);
+    setIntent(null);
+    setPaymentOption(null);
+    setIsCalculating(false);
+    setIsSubmitting(false);
+    setError(null);
+    setDate(format(addDays(new Date(), 1), "yyyy-MM-dd"));
+    setScheduledTime("09:00");
+    setName("");
+    setPhone("");
+    setEmail("");
+    setAddress("");
+    setSuburb("");
+    setState("NSW");
+    setPostcode("");
+    setNotes("");
+    setAgreed(false);
+    setComplete(false);
+    setBookingId(null);
+    setWorkReference(null);
+    bookingSubmissionKey.current = null;
+    quoteSubmissionKey.current = null;
+  }, []);
+
+  const closeModal = useCallback(() => {
+    if (complete) resetCompletedForm();
+    onClose();
+  }, [complete, onClose, resetCompletedForm]);
 
   const preferredService = services?.find(
     (service) => service.name.toLowerCase() === defaultService.toLowerCase(),
@@ -234,13 +268,18 @@ export function QuoteModal({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const closeOnEscape = (event: KeyboardEvent) =>
-      event.key === "Escape" && onClose();
+      event.key === "Escape" && closeModal();
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [open, onClose]);
+  }, [closeModal, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    contentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [open, step]);
 
   const upcomingDates = useMemo(() => {
     const today = new Date();
@@ -309,6 +348,23 @@ export function QuoteModal({
     setIntent(null);
     setPaymentOption(null);
     setError(null);
+  }
+  function chooseExtras() {
+    if (!questions) return;
+    setAnswers((current) => {
+      const next = { ...current };
+      for (const question of questions) {
+        const currentValue = next[question.key];
+        if (
+          limitedOfferKeys.has(question.key) &&
+          (typeof currentValue !== "number" || currentValue < 1)
+        ) {
+          next[question.key] = 1;
+        }
+      }
+      return next;
+    });
+    setStep(2);
   }
   async function calculateEstimate() {
     if (
@@ -472,7 +528,9 @@ export function QuoteModal({
   return (
     <div
       className={styles.backdrop}
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      onMouseDown={(event) =>
+        event.target === event.currentTarget && closeModal()
+      }
     >
       <section
         className={styles.modal}
@@ -498,7 +556,7 @@ export function QuoteModal({
             <button
               type="button"
               autoFocus
-              onClick={onClose}
+              onClick={closeModal}
               aria-label="Close quote"
             >
               <X />
@@ -536,7 +594,7 @@ export function QuoteModal({
                 );
               })}
             </div>
-            <div className={styles.content}>
+            <div className={styles.content} ref={contentRef}>
               {step === 1 ? (
                 <div className={styles.stepPanel}>
                   <Intro
@@ -658,6 +716,14 @@ export function QuoteModal({
                         <PhoneCall />
                         Request a call
                       </button>
+                      <a
+                        className={styles.callAction}
+                        href="tel:+61401356937"
+                        aria-label="Call WeDo on 0401 356 937"
+                      >
+                        <PhoneCall />
+                        Call Us
+                      </a>
                     </div>
                   ) : null}
                 </div>
@@ -755,7 +821,7 @@ export function QuoteModal({
                   type="button"
                   className={styles.continue}
                   disabled={!baseAnswersComplete || questions === undefined}
-                  onClick={() => setStep(2)}
+                  onClick={chooseExtras}
                 >
                   Choose extras
                   <ArrowRight />
@@ -857,7 +923,7 @@ export function QuoteModal({
             date={formattedDate}
             time={formatTime(scheduledTime)}
             address={`${address}, ${suburb} ${state} ${postcode}`}
-            onClose={onClose}
+            onClose={closeModal}
           />
         )}
       </section>
@@ -1075,13 +1141,14 @@ function AddonQuestion({
       : addonPresentation[question.key as keyof typeof addonPresentation];
   const Icon = presentation.icon;
   const isBoolean = question.type === "BOOLEAN";
+  const minimum = included ? 1 : 0;
   const value = isBoolean
     ? answer === true
       ? 1
       : 0
     : typeof answer === "number"
       ? answer
-      : 0;
+      : minimum;
   return (
     <div className={`${styles.addonRow} ${nested ? styles.addonNested : ""}`}>
       <span className={styles.addonIcon}>
@@ -1097,10 +1164,11 @@ function AddonQuestion({
       <div className={styles.quantity}>
         <button
           type="button"
-          disabled={value <= 0}
-          onClick={() =>
-            setAnswer(isBoolean || value <= 1 ? undefined : value - 1)
-          }
+          disabled={value <= minimum}
+          onClick={() => {
+            const nextValue = value - 1;
+            setAnswer(isBoolean || nextValue <= 0 ? undefined : nextValue);
+          }}
           aria-label={`Decrease ${question.label.toLowerCase()}`}
         >
           <Minus />

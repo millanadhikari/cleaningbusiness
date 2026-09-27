@@ -80,6 +80,106 @@ export const createBookingCheckoutSession = action({
   },
 });
 
+export const createQuoteCheckoutSession = action({
+  args: {
+    quoteRequestId: v.id("quoteRequests"),
+    paymentOption: v.union(v.literal("DEPOSIT"), v.literal("FULL")),
+    requestKey: v.string(),
+  },
+  returns: v.object({ checkoutUrl: v.string(), sentTo: v.string() }),
+  handler: async (ctx, args): Promise<{ checkoutUrl: string; sentTo: string }> => {
+    const prepared = await ctx.runMutation(
+      internal.stripeData.prepareQuoteCheckout,
+      args,
+    );
+    const stripe = stripeClient();
+    for (const sessionId of prepared.staleSessionIds) {
+      try {
+        await stripe.checkout.sessions.expire(sessionId);
+      } catch {
+        // A completed or already-expired session cannot be expired again.
+      }
+    }
+    try {
+      let session: Stripe.Checkout.Session;
+      if (prepared.existingCheckoutSessionId) {
+        session = await stripe.checkout.sessions.retrieve(
+          prepared.existingCheckoutSessionId,
+        );
+      } else {
+        const metadata = {
+          quoteRequestId: String(prepared.quoteRequestId),
+          quotePaymentId: String(prepared.paymentId),
+          paymentPurpose:
+            prepared.paymentOption === "DEPOSIT" ? "QUOTE_DEPOSIT" : "QUOTE_FULL",
+        };
+        session = await stripe.checkout.sessions.create(
+          {
+            mode: "payment",
+            customer_email: prepared.customerEmail,
+            client_reference_id: String(prepared.quoteRequestId),
+            line_items: [
+              {
+                quantity: 1,
+                price_data: {
+                  currency: "aud",
+                  unit_amount: prepared.amountCents,
+                  product_data: {
+                    name:
+                      prepared.paymentOption === "DEPOSIT"
+                        ? `${prepared.serviceName} deposit`
+                        : prepared.serviceName,
+                  },
+                },
+              },
+            ],
+            metadata,
+            payment_intent_data: { metadata },
+            success_url: `${publicAppUrl()}/booking/success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${publicAppUrl()}/?quote_payment=cancelled`,
+            integration_identifier:
+              process.env.STRIPE_INTEGRATION_IDENTIFIER?.trim() ||
+              DEFAULT_INTEGRATION_IDENTIFIER,
+          },
+          { idempotencyKey: `quote-checkout:${prepared.paymentId}` },
+        );
+      }
+      if (!session.url) throw new Error("Stripe did not return a checkout URL.");
+      if (!prepared.alreadySent) {
+        await ctx.runMutation(internal.stripeData.saveQuoteCheckoutSession, {
+          paymentId: prepared.paymentId,
+          checkoutSessionId: session.id,
+          sentTo: prepared.customerEmail,
+        });
+        await ctx.runAction(internal.emails.sendQuotePaymentLink, {
+          quoteRequestId: prepared.quoteRequestId,
+          quoteReference: prepared.quoteReference,
+          customerId: prepared.customerId,
+          to: prepared.customerEmail,
+          customerFirstName: prepared.customerFirstName,
+          serviceName: prepared.serviceName,
+          scheduledDate: prepared.scheduledDate,
+          address: prepared.address,
+          totalAmountCents: prepared.totalAmountCents,
+          paymentAmountCents: prepared.amountCents,
+          paymentOption: prepared.paymentOption,
+          checkoutUrl: session.url,
+        });
+      }
+      return { checkoutUrl: session.url, sentTo: prepared.customerEmail };
+    } catch (error) {
+      await ctx.runMutation(internal.stripeData.markQuoteCheckoutFailed, {
+        paymentId: prepared.paymentId,
+      });
+      console.error(
+        "Unable to create quote Checkout session",
+        error instanceof Error ? error.message : "Unknown Stripe error",
+      );
+      throw new Error("Unable to create and send the payment link. Please try again.");
+    }
+  },
+});
+
 export const createBalanceCheckoutSession = action({
   args: {
     bookingId: v.id("bookings"),

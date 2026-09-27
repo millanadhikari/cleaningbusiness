@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { mutation, query, type MutationCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireRole } from "./lib/auth";
 import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
@@ -648,18 +648,46 @@ export const deleteAdminQuote = mutation({
   },
 });
 
-export const convertAcceptedQuoteToBooking = mutation({
-  args: { quoteRequestId: v.id("quoteRequests") },
-  returns: v.id("bookings"),
-  handler: async (ctx, args) => {
-    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+export function calculateQuotePaymentAmount(
+  service: Doc<"services">,
+  totalCents: number,
+  paymentOption: "DEPOSIT" | "FULL",
+) {
+  if (paymentOption === "FULL") return totalCents;
+  if (!service.depositType || service.depositValue === undefined) {
+    throw new Error("Configure a deposit for this service before requesting one.");
+  }
+  const deposit =
+    service.depositType === "FIXED"
+      ? service.depositValue
+      : Math.round((totalCents * service.depositValue) / 10_000);
+  return Math.min(totalCents, Math.max(1, deposit));
+}
+
+export async function convertAcceptedQuoteRecord(
+  ctx: MutationCtx,
+  args: {
+    quoteRequestId: Id<"quoteRequests">;
+    paymentOption: "DEPOSIT" | "FULL" | "PAY_LATER";
+    paymentMode: "STRIPE_CHECKOUT" | "PAY_LATER" | "MANUAL";
+    amountPaidCents?: number;
+    paymentMethod?: "STRIPE" | "BANK_TRANSFER" | "CASH";
+    paymentIntentId?: string;
+    checkoutSessionId?: string;
+    paymentRequestKey?: string;
+    createdByUserId?: Id<"users">;
+    createdByName?: string;
+    reference?: string;
+    note?: string;
+  },
+) {
     const quote = await ctx.db.get(args.quoteRequestId);
     if (!quote) throw new Error("Quote not found.");
     if (quote.status !== "ACCEPTED") {
       throw new Error("Mark the quote as accepted before converting it.");
     }
     if (quote.convertedBookingId) {
-      throw new Error("This quote has already been converted.");
+      return quote.convertedBookingId;
     }
     if (!quote.serviceId) {
       throw new Error("Select a service before converting this quote.");
@@ -687,6 +715,13 @@ export const convertAcceptedQuoteToBooking = mutation({
 
     const now = Date.now();
     const reference = quote.reference ?? (await allocateWorkReference(ctx));
+    const paidAmount = args.amountPaidCents ?? 0;
+    const paymentStatus =
+      paidAmount >= quote.estimatedTotalCents
+        ? ("PAID" as const)
+        : paidAmount > 0
+          ? ("DEPOSIT_PAID" as const)
+          : ("UNPAID" as const);
     const bookingId = await ctx.db.insert("bookings", {
       reference,
       customerId: quote.customerId,
@@ -694,12 +729,17 @@ export const convertAcceptedQuoteToBooking = mutation({
       quoteRequestId: quote._id,
       source: "ADMIN",
       status: "CONFIRMED",
-      paymentStatus: "UNPAID",
-      paymentOption: "PAY_LATER",
-        paymentMode: "PAY_LATER",
+      paymentStatus,
+      paymentOption: args.paymentOption,
+      paymentMode: args.paymentMode,
+      stripeCheckoutSessionId: args.checkoutSessionId,
+      stripePaymentIntentId: args.paymentIntentId,
+      paymentLedgerInitializedAt: paidAmount > 0 ? now : undefined,
       estimatedSubtotalCents: quote.estimatedSubtotalCents,
       estimatedTotalCents: quote.estimatedTotalCents,
       finalTotalCents: quote.estimatedTotalCents,
+      depositAmountCents:
+        args.paymentOption === "DEPOSIT" ? paidAmount : undefined,
       serviceAnswers: quote.submittedAnswers ?? [],
       estimateBreakdown: quote.estimateBreakdown ?? [
         { label: service.name, amount: quote.estimatedTotalCents },
@@ -720,6 +760,25 @@ export const convertAcceptedQuoteToBooking = mutation({
       convertedBookingId: bookingId,
       updatedAt: now,
     });
+    if (paidAmount > 0 && args.paymentMethod && args.paymentRequestKey) {
+      await ctx.db.insert("bookingPayments", {
+        bookingId,
+        kind: "INITIAL",
+        status: "PAID",
+        amountCents: paidAmount,
+        requestKey: args.paymentRequestKey,
+        paymentMethod: args.paymentMethod,
+        paymentIntentId: args.paymentIntentId,
+        checkoutSessionId: args.checkoutSessionId,
+        createdByUserId: args.createdByUserId,
+        createdByName: args.createdByName,
+        reference: args.reference,
+        note: args.note,
+        paidAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
     if (customer?.email) {
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingConfirmation, {
         bookingId,
@@ -738,12 +797,65 @@ export const convertAcceptedQuoteToBooking = mutation({
           .filter(Boolean)
           .join(", "),
         totalAmountCents: quote.estimatedTotalCents,
-        amountPaidCents: 0,
-        paymentStatus: "UNPAID",
+        amountPaidCents: paidAmount,
+        paymentStatus,
           developmentPayment: false,
       });
     }
     return bookingId;
+}
+
+export const convertAcceptedQuoteToBooking = mutation({
+  args: { quoteRequestId: v.id("quoteRequests") },
+  returns: v.id("bookings"),
+  handler: async (ctx, args) => {
+    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    return convertAcceptedQuoteRecord(ctx, {
+      quoteRequestId: args.quoteRequestId,
+      paymentOption: "PAY_LATER",
+      paymentMode: "PAY_LATER",
+    });
+  },
+});
+
+export const recordManualPaymentAndConvert = mutation({
+  args: {
+    quoteRequestId: v.id("quoteRequests"),
+    paymentOption: v.union(v.literal("DEPOSIT"), v.literal("FULL")),
+    paymentMethod: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    reference: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  returns: v.id("bookings"),
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const quote = await ctx.db.get(args.quoteRequestId);
+    if (!quote?.serviceId || quote.estimatedTotalCents === undefined) {
+      throw new Error("The accepted quote does not have a payable total.");
+    }
+    const service = await ctx.db.get(quote.serviceId);
+    if (!service) throw new Error("The selected service no longer exists.");
+    const amountPaidCents = calculateQuotePaymentAmount(
+      service,
+      quote.estimatedTotalCents,
+      args.paymentOption,
+    );
+    const createdByName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "Admin";
+    return convertAcceptedQuoteRecord(ctx, {
+      quoteRequestId: quote._id,
+      paymentOption: args.paymentOption,
+      paymentMode: "MANUAL",
+      amountPaidCents,
+      paymentMethod: args.paymentMethod,
+      paymentRequestKey: `quote-manual:${quote._id}:${crypto.randomUUID()}`,
+      createdByUserId: user._id,
+      createdByName,
+      reference: optionalText(args.reference, "Payment reference", 160),
+      note: optionalText(args.note, "Payment note", 1000),
+    });
   },
 });
 
@@ -799,8 +911,18 @@ export const get = query({
     await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
     const quote = await ctx.db.get(args.quoteRequestId);
     if (!quote) return null;
-    const customer = await ctx.db.get(quote.customerId);
-    return { ...quote, customer };
+    const [customer, service, payments] = await Promise.all([
+      ctx.db.get(quote.customerId),
+      quote.serviceId ? ctx.db.get(quote.serviceId) : null,
+      ctx.db
+        .query("quotePayments")
+        .withIndex("by_quote_and_created_at", (index) =>
+          index.eq("quoteRequestId", quote._id),
+        )
+        .order("desc")
+        .take(20),
+    ]);
+    return { ...quote, customer, service, payments };
   },
 });
 

@@ -3,6 +3,7 @@ import { internalAction } from "./_generated/server";
 import {
   bookingConfirmationEmail,
   bookingPaymentLinkEmail,
+  quotePaymentLinkEmail,
   quoteRequestReceivedEmail,
 } from "./emailTemplates";
 import { sendTransactionalEmail } from "./lib/sendTransactionalEmail";
@@ -83,6 +84,37 @@ export const sendBookingPaymentLink = internalAction({
       text: template.text,
       customerId: args.customerId,
       bookingId: args.bookingId,
+    });
+    return null;
+  },
+});
+
+export const sendQuotePaymentLink = internalAction({
+  args: {
+    quoteRequestId: v.id("quoteRequests"),
+    quoteReference: v.string(),
+    customerId: v.id("customers"),
+    to: v.string(),
+    customerFirstName: v.string(),
+    serviceName: v.string(),
+    scheduledDate: v.string(),
+    address: v.string(),
+    totalAmountCents: v.number(),
+    paymentAmountCents: v.number(),
+    paymentOption: v.union(v.literal("DEPOSIT"), v.literal("FULL")),
+    checkoutUrl: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const template = quotePaymentLinkEmail(args);
+    await sendTransactionalEmail(ctx, {
+      type: "QUOTE_PAYMENT_LINK",
+      to: args.to,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+      customerId: args.customerId,
+      quoteRequestId: args.quoteRequestId,
     });
     return null;
   },

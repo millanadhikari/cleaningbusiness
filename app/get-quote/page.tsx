@@ -1,15 +1,13 @@
 import { ArrowLeft, ArrowRight, Calculator, CheckCircle2 } from 'lucide-react';
-import Image from 'next/image';
 import Link from 'next/link';
+import { BrandLogo } from '@/components/brand-logo';
 
 export default function GetQuotePage() {
   return (
     <main className="min-h-screen bg-[#f3f8f6] text-slate-950">
       <header className="border-b border-emerald-900/10 bg-white">
         <div className="mx-auto flex h-20 max-w-6xl items-center justify-between px-5 sm:px-8">
-          <Link href="/" aria-label="WeDo Cleaning Services home">
-            <Image src="/wedo-logo.svg" alt="WeDo Cleaning Services" width={235} height={72} className="h-12 w-auto" priority />
-          </Link>
+          <BrandLogo href="/" size="lg" priority />
           <Link href="/" className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-emerald-800">
             <ArrowLeft className="size-4" />
             Back to website

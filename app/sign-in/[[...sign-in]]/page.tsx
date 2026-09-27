@@ -1,6 +1,6 @@
 import { ArrowLeft, CheckCircle2, ShieldCheck, Sparkles } from 'lucide-react';
-import Image from 'next/image';
 import Link from 'next/link';
+import { BrandLogo } from '@/components/brand-logo';
 
 const benefits = [
   'Secure access for authorised staff',
@@ -21,13 +21,11 @@ export default function SignInPage() {
           <div className="absolute -right-6 top-8 size-56 rounded-full border border-[#d5f392]/20" />
           <div className="absolute -bottom-28 -left-20 size-96 rounded-full bg-[#d5f392]/10" />
 
-          <Link
+          <BrandLogo
             href="/"
             className="relative z-10 w-fit rounded-xl bg-white px-4 py-3 shadow-sm"
-            aria-label="WeDo Cleaning Services home"
-          >
-            <Image src="/wedo-logo.svg" alt="WeDo Cleaning Services" width={188} height={58} priority />
-          </Link>
+            priority
+          />
 
           <div className="relative z-10 my-auto max-w-xl py-14">
             <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-[#d5f392]">
@@ -59,9 +57,7 @@ export default function SignInPage() {
         <section className="flex items-center justify-center px-5 py-8 sm:px-10 sm:py-12 lg:px-14 xl:px-20">
           <div className="w-full max-w-md">
             <div className="mb-9 flex items-center justify-between lg:hidden">
-              <Link href="/" aria-label="WeDo Cleaning Services home">
-                <Image src="/wedo-logo.svg" alt="WeDo Cleaning Services" width={170} height={52} priority />
-              </Link>
+              <BrandLogo href="/" priority />
               <Link
                 href="/"
                 className="inline-flex items-center gap-2 text-sm font-semibold text-[#506367] hover:text-[#007c70]"

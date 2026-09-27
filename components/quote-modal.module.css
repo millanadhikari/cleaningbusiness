@@ -1449,11 +1449,12 @@
 
 .outcomeActions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin-top: 20px;
 }
-.outcomeActions button {
+.outcomeActions button,
+.outcomeActions a {
   min-height: 50px;
   border-radius: 13px;
   display: flex;
@@ -1462,6 +1463,7 @@
   gap: 8px;
   font-size: 13px;
   font-weight: 800;
+  text-decoration: none;
 }
 .outcomeActions svg {
   width: 17px;
@@ -1475,6 +1477,10 @@
   border: 1px solid #1b655a;
   background: #fff;
   color: #174a43;
+}
+.callAction {
+  background: #173f3a;
+  color: #fff;
 }
 .reviewCard {
   border: 1px solid #cbded5;

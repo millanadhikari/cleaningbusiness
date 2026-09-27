@@ -9,6 +9,7 @@ export type DeliveryInput = {
   type:
     | "BOOKING_CONFIRMATION"
     | "QUOTE_REQUEST_RECEIVED"
+    | "QUOTE_PAYMENT_LINK"
     | "BOOKING_PAYMENT_LINK"
     | "INVOICE";
   to: string;

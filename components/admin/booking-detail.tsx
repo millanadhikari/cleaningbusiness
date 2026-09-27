@@ -111,7 +111,7 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
     isAuthenticated ? { bookingId } : "skip",
   );
   const cleaners = useQuery(
-    api.bookings.listMockCleaners,
+    api.cleaners.listActive,
     isAuthenticated ? {} : "skip",
   );
   const setAssignment = useMutation(api.bookings.setCleanerAssignment);
@@ -319,7 +319,10 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
     }
   }
 
-  async function changeAssignment(cleanerId: string, assigned: boolean) {
+  async function changeAssignment(
+    cleanerId: Id<"cleaners">,
+    assigned: boolean,
+  ) {
     setAssignmentBusy(cleanerId);
     setError(null);
     try {
@@ -419,9 +422,11 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
   ]
     .filter(Boolean)
     .join(", ");
-  const assignedIds = new Set(booking.assignedCleanerIds ?? []);
+  const assignedIds = new Set(
+    booking.assignedCleaners.map((cleaner) => cleaner._id),
+  );
   const availableCleaners =
-    cleaners?.filter((cleaner) => !assignedIds.has(cleaner.id)) ?? [];
+    cleaners?.filter((cleaner) => !assignedIds.has(cleaner._id)) ?? [];
 
   return (
     <div className={styles.workspace}>
@@ -694,7 +699,7 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                 cleaners
               </CardTitle>
               <CardDescription>
-                Assign one or more cleaners or contractors from the demo roster.
+                Assign one or more active team members to this booking.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -707,15 +712,17 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                 >
                   <option value="">Select cleaner or contractor</option>
                   {availableCleaners.map((cleaner) => (
-                    <option key={cleaner.id} value={cleaner.id}>
-                      {cleaner.name} — {cleaner.specialty}
+                    <option key={cleaner._id} value={cleaner._id}>
+                      {cleaner.name} — {cleaner.specialty ?? label(cleaner.engagementType)}
                     </option>
                   ))}
                 </NativeSelect>
                 <Button
                   type="button"
                   disabled={!selectedCleaner || assignmentBusy !== null}
-                  onClick={() => changeAssignment(selectedCleaner, true)}
+                  onClick={() =>
+                    changeAssignment(selectedCleaner as Id<"cleaners">, true)
+                  }
                 >
                   {assignmentBusy === selectedCleaner ? (
                     <LoaderCircle className="animate-spin" />
@@ -729,7 +736,7 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                 <div className="grid gap-3 sm:grid-cols-2">
                   {booking.assignedCleaners.map((cleaner) => (
                     <div
-                      key={cleaner.id}
+                      key={cleaner._id}
                       className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-3"
                     >
                       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-emerald-800 text-xs font-bold text-white">
@@ -740,17 +747,17 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                           {cleaner.name}
                         </p>
                         <p className="truncate text-xs text-slate-500">
-                          {cleaner.specialty}
+                          {cleaner.specialty ?? label(cleaner.engagementType)}
                         </p>
                       </div>
                       <button
                         type="button"
                         aria-label={`Unassign ${cleaner.name}`}
                         disabled={assignmentBusy !== null}
-                        onClick={() => changeAssignment(cleaner.id, false)}
+                        onClick={() => changeAssignment(cleaner._id, false)}
                         className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-red-700 disabled:opacity-50"
                       >
-                        {assignmentBusy === cleaner.id ? (
+                        {assignmentBusy === cleaner._id ? (
                           <LoaderCircle className="size-4 animate-spin" />
                         ) : (
                           <X className="size-4" />
@@ -766,7 +773,7 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                     No cleaners assigned
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Choose one or more people from the mock roster.
+                    Add active cleaners from the Team page, then assign them here.
                   </p>
                 </div>
               )}

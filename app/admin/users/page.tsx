@@ -2,12 +2,12 @@ import { auth } from '@clerk/nextjs/server';
 import { fetchQuery } from 'convex/nextjs';
 import { AdminUsersManager } from '@/components/admin/admin-users-manager';
 import { api } from '@/convex/_generated/api';
+import { getConvexAuthToken } from '@/lib/convex-auth-token';
 
 export default async function AdminUsersPage() {
   await auth.protect();
 
-  const { getToken } = await auth();
-  const token = await getToken();
+  const token = await getConvexAuthToken();
   const currentUser = await fetchQuery(
     api.users.current,
     {},

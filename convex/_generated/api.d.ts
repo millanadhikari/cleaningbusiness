@@ -12,6 +12,7 @@ import type * as adminInvitations from "../adminInvitations.js";
 import type * as blogs from "../blogs.js";
 import type * as bookings from "../bookings.js";
 import type * as bootstrap from "../bootstrap.js";
+import type * as cleaners from "../cleaners.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as emailDelivery from "../emailDelivery.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   blogs: typeof blogs;
   bookings: typeof bookings;
   bootstrap: typeof bootstrap;
+  cleaners: typeof cleaners;
   customers: typeof customers;
   dashboard: typeof dashboard;
   emailDelivery: typeof emailDelivery;

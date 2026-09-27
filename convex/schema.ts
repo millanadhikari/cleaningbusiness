@@ -49,6 +49,24 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_phone", ["phone"])
     .index("by_created_at", ["createdAt"]),
+  cleaners: defineTable({
+    firstName: v.string(),
+    lastName: v.string(),
+    email: v.optional(v.string()),
+    phone: v.string(),
+    specialty: v.optional(v.string()),
+    engagementType: v.union(
+      v.literal("EMPLOYEE"),
+      v.literal("CONTRACTOR"),
+    ),
+    status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_email", ["email"])
+    .index("by_status", ["status"])
+    .index("by_created_at", ["createdAt"]),
   quoteRequests: defineTable({
     reference: v.optional(v.string()),
     submissionKey: v.optional(v.string()),
@@ -194,6 +212,15 @@ export default defineSchema({
     .index("by_stripe_checkout_session_id", ["stripeCheckoutSessionId"])
     .index("by_scheduled_date", ["scheduledDate"])
     .index("by_created_at", ["createdAt"]),
+  bookingCleanerAssignments: defineTable({
+    bookingId: v.id("bookings"),
+    cleanerId: v.id("cleaners"),
+    assignedByUserId: v.id("users"),
+    assignedAt: v.number(),
+  })
+    .index("by_booking", ["bookingId"])
+    .index("by_cleaner", ["cleanerId"])
+    .index("by_booking_and_cleaner", ["bookingId", "cleanerId"]),
   referenceCounters: defineTable({
     name: v.string(),
     currentValue: v.number(),

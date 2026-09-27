@@ -17,21 +17,6 @@ const paymentOption = v.union(
   v.literal("PAY_LATER"),
 );
 
-const mockCleaners = [
-  {
-    id: "mock-amelia",
-    name: "Amelia Hart",
-    specialty: "Residential specialist",
-  },
-  { id: "mock-daniel", name: "Daniel Kim", specialty: "End of lease team" },
-  { id: "mock-priya", name: "Priya Shah", specialty: "Commercial cleaning" },
-  {
-    id: "mock-luca",
-    name: "Luca Bennett",
-    specialty: "Carpet and detail work",
-  },
-] as const;
-
 const noteKind = v.union(v.literal("ADMIN_NOTE"), v.literal("JOB_NOTE"));
 
 function validatePhotoUrls(values: string[] | undefined) {
@@ -647,36 +632,41 @@ export const recordManualPayment = mutation({
   },
 });
 
-export const listMockCleaners = query({
-  args: {},
-  handler: async (ctx) => {
-    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
-    return mockCleaners;
-  },
-});
-
 export const setCleanerAssignment = mutation({
   args: {
     bookingId: v.id("bookings"),
-    cleanerId: v.string(),
+    cleanerId: v.id("cleaners"),
     assigned: v.boolean(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found.");
-    if (!mockCleaners.some((cleaner) => cleaner.id === args.cleanerId)) {
-      throw new Error("Cleaner is not available in the temporary roster.");
+    const cleaner = await ctx.db.get(args.cleanerId);
+    if (!cleaner) throw new Error("Cleaner not found.");
+    const existing = await ctx.db
+      .query("bookingCleanerAssignments")
+      .withIndex("by_booking_and_cleaner", (index) =>
+        index.eq("bookingId", booking._id).eq("cleanerId", cleaner._id),
+      )
+      .unique();
+    if (args.assigned) {
+      if (cleaner.status !== "ACTIVE") {
+        throw new Error("Only active cleaners can be assigned.");
+      }
+      if (!existing) {
+        await ctx.db.insert("bookingCleanerAssignments", {
+          bookingId: booking._id,
+          cleanerId: cleaner._id,
+          assignedByUserId: user._id,
+          assignedAt: Date.now(),
+        });
+      }
+    } else if (existing) {
+      await ctx.db.delete(existing._id);
     }
-    const current = booking.assignedCleanerIds ?? [];
-    const assignedCleanerIds = args.assigned
-      ? Array.from(new Set([...current, args.cleanerId]))
-      : current.filter((id) => id !== args.cleanerId);
-    await ctx.db.patch(booking._id, {
-      assignedCleanerIds,
-      updatedAt: Date.now(),
-    });
+    await ctx.db.patch(booking._id, { updatedAt: Date.now() });
     return null;
   },
 });
@@ -756,7 +746,7 @@ export const get = query({
     await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
-    const [customer, service, bookingNotes, adjustments, payments, emailLogs] = await Promise.all([
+    const [customer, service, bookingNotes, adjustments, payments, emailLogs, cleanerAssignments] = await Promise.all([
       ctx.db.get(booking.customerId),
       ctx.db.get(booking.serviceId),
       ctx.db
@@ -784,10 +774,20 @@ export const get = query({
         .query("emailLogs")
         .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
         .collect(),
+      ctx.db
+        .query("bookingCleanerAssignments")
+        .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
+        .collect(),
     ]);
-    const assignedCleaners = (booking.assignedCleanerIds ?? [])
-      .map((id) => mockCleaners.find((cleaner) => cleaner.id === id))
-      .filter((cleaner) => cleaner !== undefined);
+    const assignedCleanerDocuments = await Promise.all(
+      cleanerAssignments.map((assignment) => ctx.db.get(assignment.cleanerId)),
+    );
+    const assignedCleaners = assignedCleanerDocuments
+      .filter((cleaner) => cleaner !== null)
+      .map((cleaner) => ({
+        ...cleaner,
+        name: `${cleaner.firstName} ${cleaner.lastName}`,
+      }));
     const adjustmentsTotalCents = adjustments.reduce(
       (total, adjustment) => total + adjustment.amountCents,
       0,

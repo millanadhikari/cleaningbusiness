@@ -18,6 +18,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  UserRoundCheck,
   UsersRound,
 } from 'lucide-react';
 import Image from 'next/image';
@@ -66,6 +67,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { href: '/admin/quotes', label: 'Quotes', icon: ClipboardList },
       { href: '/admin/bookings', label: 'Bookings', icon: CalendarCheck },
       { href: '/admin/calendar', label: 'Calendar', icon: CalendarDays },
+      { href: '/admin/cleaners', label: 'Team', icon: UserRoundCheck },
       { href: '/admin/customers', label: 'Customers', icon: UsersRound },
       { href: '/admin/services', label: 'Services', icon: ConciergeBell },
       { href: '/admin/blog', label: 'Blog', icon: FileText },
@@ -93,6 +95,7 @@ const pageTitles: Record<string, string> = {
   '/admin/blog': 'Blog',
   '/admin/bookings': 'Bookings',
   '/admin/calendar': 'Calendar',
+  '/admin/cleaners': 'Cleaning Team',
   '/admin/users': 'Admin Users',
   '/admin/settings': 'Settings',
 };

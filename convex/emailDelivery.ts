@@ -5,6 +5,7 @@ const emailType = v.union(
   v.literal("BOOKING_CONFIRMATION"),
   v.literal("QUOTE_REQUEST_RECEIVED"),
   v.literal("BOOKING_PAYMENT_LINK"),
+  v.literal("INVOICE"),
 );
 
 export const createPendingLog = internalMutation({
@@ -30,15 +31,16 @@ export const markSent = internalMutation({
     emailLogId: v.id("emailLogs"),
     providerMessageId: v.string(),
   },
-  returns: v.null(),
+  returns: v.number(),
   handler: async (ctx, args) => {
+    const sentAt = Date.now();
     await ctx.db.patch(args.emailLogId, {
       status: "SENT",
       providerMessageId: args.providerMessageId,
       errorMessage: undefined,
-      sentAt: Date.now(),
+      sentAt,
     });
-    return null;
+    return sentAt;
   },
 });
 

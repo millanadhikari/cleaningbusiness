@@ -9,7 +9,8 @@ export type DeliveryInput = {
   type:
     | "BOOKING_CONFIRMATION"
     | "QUOTE_REQUEST_RECEIVED"
-    | "BOOKING_PAYMENT_LINK";
+    | "BOOKING_PAYMENT_LINK"
+    | "INVOICE";
   to: string;
   subject: string;
   html: string;
@@ -17,7 +18,16 @@ export type DeliveryInput = {
   customerId: Id<"customers">;
   bookingId?: Id<"bookings">;
   quoteRequestId?: Id<"quoteRequests">;
+  attachments?: Array<{
+    filename: string;
+    content: string;
+    contentType?: string;
+  }>;
 };
+
+export type DeliveryResult =
+  | { status: "SENT"; sentAt: number }
+  | { status: "FAILED"; errorMessage: string };
 
 function safeErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Unknown email error";
@@ -35,8 +45,8 @@ function configuredHeader(value: string | undefined, fallback: string) {
 export async function sendTransactionalEmail(
   ctx: ActionCtx,
   input: DeliveryInput,
-) {
-  const emailLogId = await ctx.runMutation(
+): Promise<DeliveryResult> {
+  const emailLogId: Id<"emailLogs"> = await ctx.runMutation(
     internal.emailDelivery.createPendingLog,
     {
       type: input.type,
@@ -68,6 +78,11 @@ export async function sendTransactionalEmail(
         subject: input.subject,
         html: input.html,
         text: input.text,
+        attachments: input.attachments?.map((attachment) => ({
+          filename: attachment.filename,
+          content: attachment.content,
+          content_type: attachment.contentType,
+        })),
       }),
     });
 
@@ -93,14 +108,17 @@ export async function sendTransactionalEmail(
       );
     }
 
-    await ctx.runMutation(internal.emailDelivery.markSent, {
+    const sentAt: number = await ctx.runMutation(internal.emailDelivery.markSent, {
       emailLogId,
       providerMessageId,
     });
+    return { status: "SENT" as const, sentAt };
   } catch (error) {
+    const errorMessage = safeErrorMessage(error);
     await ctx.runMutation(internal.emailDelivery.markFailed, {
       emailLogId,
-      errorMessage: safeErrorMessage(error),
+      errorMessage,
     });
+    return { status: "FAILED" as const, errorMessage };
   }
 }

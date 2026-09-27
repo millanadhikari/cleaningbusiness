@@ -232,6 +232,7 @@ export default defineSchema({
       v.literal("BOOKING_CONFIRMATION"),
       v.literal("QUOTE_REQUEST_RECEIVED"),
       v.literal("BOOKING_PAYMENT_LINK"),
+      v.literal("INVOICE"),
     ),
     to: v.string(),
     subject: v.string(),

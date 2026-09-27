@@ -137,6 +137,30 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_customer", ["customerId"])
     .index("by_created_at", ["createdAt"]),
+  quotePayments: defineTable({
+    quoteRequestId: v.id("quoteRequests"),
+    paymentOption: v.union(v.literal("DEPOSIT"), v.literal("FULL")),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("PAID"),
+      v.literal("FAILED"),
+      v.literal("EXPIRED"),
+    ),
+    amountCents: v.number(),
+    requestKey: v.string(),
+    checkoutSessionId: v.optional(v.string()),
+    paymentIntentId: v.optional(v.string()),
+    createdByUserId: v.id("users"),
+    createdByName: v.string(),
+    sentTo: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    paidAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_quote_and_created_at", ["quoteRequestId", "createdAt"])
+    .index("by_checkout_session", ["checkoutSessionId"])
+    .index("by_request_key", ["requestKey"]),
   bookings: defineTable({
     reference: v.optional(v.string()),
     submissionKey: v.optional(v.string()),
@@ -170,6 +194,7 @@ export default defineSchema({
       v.literal("DEVELOPMENT_MOCK"),
       v.literal("STRIPE_CHECKOUT"),
       v.literal("PAY_LATER"),
+      v.literal("MANUAL"),
     ),
     stripeCheckoutSessionId: v.optional(v.string()),
     stripePaymentIntentId: v.optional(v.string()),
@@ -231,6 +256,7 @@ export default defineSchema({
     status: v.union(v.literal("PROCESSED"), v.literal("IGNORED")),
     checkoutSessionId: v.optional(v.string()),
     bookingId: v.optional(v.id("bookings")),
+    quoteRequestId: v.optional(v.id("quoteRequests")),
     createdAt: v.number(),
   }).index("by_event_id", ["eventId"]),
   blogs: defineTable({
@@ -258,6 +284,7 @@ export default defineSchema({
     type: v.union(
       v.literal("BOOKING_CONFIRMATION"),
       v.literal("QUOTE_REQUEST_RECEIVED"),
+      v.literal("QUOTE_PAYMENT_LINK"),
       v.literal("BOOKING_PAYMENT_LINK"),
       v.literal("INVOICE"),
     ),

@@ -30,6 +30,18 @@ type BookingPaymentLinkInput = {
   checkoutUrl: string;
 };
 
+type QuotePaymentLinkInput = {
+  customerFirstName: string;
+  quoteReference: string;
+  serviceName: string;
+  scheduledDate: string;
+  address: string;
+  totalAmountCents: number;
+  paymentAmountCents: number;
+  paymentOption: "DEPOSIT" | "FULL";
+  checkoutUrl: string;
+};
+
 type EmailTemplate = {
   subject: string;
   html: string;
@@ -76,6 +88,13 @@ function formatTime(value: string) {
   return `${hours % 12 || 12}:${match[2]} ${suffix}`;
 }
 
+export function emailBrandLockup() {
+  return `<table role="presentation" cellspacing="0" cellpadding="0"><tr>
+    <td style="padding-right:10px;vertical-align:middle;"><img src="https://wedocleaning.com.au/wedo-mark.png" width="54" height="57" alt="" style="display:block;width:54px;height:57px;object-fit:contain;"></td>
+    <td style="vertical-align:middle;"><div style="font-size:25px;font-weight:800;line-height:1;color:#16363b;letter-spacing:-1.2px;">We<span style="color:#008575;">Do</span></div><div style="margin-top:6px;font-size:7px;font-weight:700;line-height:1;letter-spacing:1.35px;color:#455e61;white-space:nowrap;">CLEANING SERVICES</div></td>
+  </tr></table>`;
+}
+
 function layout(preheader: string, content: string) {
   return `<!doctype html>
 <html lang="en">
@@ -89,9 +108,8 @@ function layout(preheader: string, content: string) {
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f7f6;padding:24px 12px;">
       <tr><td align="center">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #dce8e5;">
-          <tr><td style="background:#174c48;padding:26px 32px;color:#ffffff;">
-            <div style="font-size:22px;font-weight:700;letter-spacing:-0.3px;">We Do Cleaning</div>
-            <div style="margin-top:4px;font-size:13px;color:#cce1de;">Professional cleaning, thoughtfully done.</div>
+          <tr><td style="background:#ffffff;padding:22px 32px;border-bottom:1px solid #dce8e5;">
+            ${emailBrandLockup()}
           </td></tr>
           <tr><td style="padding:32px;">${content}</td></tr>
           <tr><td style="padding:22px 32px;background:#eef5f3;color:#54716e;font-size:12px;line-height:1.6;">
@@ -177,6 +195,37 @@ export function quoteRequestReceivedEmail(
     subject,
     html: layout(subject, content),
     text: `Hi ${input.customerFirstName},\n\nThanks for getting in touch. ${nextStep}\n\nReference: ${input.quoteReference}\nService: ${input.serviceName}\n\nYou can reply to this email if there is anything else you would like us to know.`,
+  };
+}
+
+export function quotePaymentLinkEmail(
+  input: QuotePaymentLinkInput,
+): EmailTemplate {
+  const isDeposit = input.paymentOption === "DEPOSIT";
+  const subject = isDeposit
+    ? "Secure your We Do Cleaning booking"
+    : "Pay your We Do Cleaning quote";
+  const total = formatMoney(input.totalAmountCents);
+  const payment = formatMoney(input.paymentAmountCents);
+  const paymentLabel = isDeposit ? "Deposit due" : "Full amount due";
+  const content = `
+    <h1 style="margin:0 0 14px;font-size:26px;line-height:1.25;color:#123f3b;">Your quote is ready for payment</h1>
+    <p style="margin:0 0 22px;font-size:15px;line-height:1.7;color:#496663;">Hi ${escapeHtml(input.customerFirstName)}, please use the secure link below to ${isDeposit ? "pay your deposit and confirm" : "pay and confirm"} your cleaning booking.</p>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border-top:1px solid #dce8e5;border-bottom:1px solid #dce8e5;">
+      ${detailRow("Quote reference", input.quoteReference)}
+      ${detailRow("Service", input.serviceName)}
+      ${detailRow("Date", formatDate(input.scheduledDate))}
+      ${detailRow("Address", input.address)}
+      ${detailRow("Quote total", total)}
+      ${detailRow(paymentLabel, payment)}
+    </table>
+    <p style="margin:24px 0;text-align:center;"><a href="${escapeHtml(input.checkoutUrl)}" style="display:inline-block;border-radius:10px;background:#174c48;padding:14px 24px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;">${isDeposit ? "Pay deposit" : "Pay securely"}</a></p>
+    <p style="margin:0;font-size:13px;line-height:1.6;color:#67817e;">Your booking will be created automatically after Stripe confirms the payment.</p>`;
+
+  return {
+    subject,
+    html: layout(subject, content),
+    text: `Hi ${input.customerFirstName},\n\nPlease pay your accepted cleaning quote securely.\n\nQuote reference: ${input.quoteReference}\nService: ${input.serviceName}\nDate: ${formatDate(input.scheduledDate)}\nAddress: ${input.address}\nQuote total: ${total}\n${paymentLabel}: ${payment}\n\nPay securely: ${input.checkoutUrl}\n\nYour booking will be created automatically after Stripe confirms the payment.`,
   };
 }
 

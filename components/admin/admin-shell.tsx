@@ -21,11 +21,11 @@ import {
   UserRoundCheck,
   UsersRound,
 } from 'lucide-react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
+import { BrandLogo } from '@/components/brand-logo';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -233,22 +233,7 @@ function SidebarNavigation({
 }
 
 function Brand({ compact = false }: { compact?: boolean }) {
-  return (
-    <Link
-      href="/admin"
-      className="inline-flex min-w-0 items-center"
-      aria-label="WeDo Cleaning admin dashboard"
-    >
-      <Image
-        src={compact ? '/favicon.svg' : '/wedo-logo.svg'}
-        alt="WeDo Cleaning Services"
-        width={compact ? 42 : 188}
-        height={compact ? 42 : 58}
-        className={compact ? 'size-9' : 'h-10 w-auto'}
-        priority
-      />
-    </Link>
-  );
+  return <BrandLogo href="/admin" compact={compact} size={compact ? 'sm' : 'md'} priority />;
 }
 
 function ProfileCard({

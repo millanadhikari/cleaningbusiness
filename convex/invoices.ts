@@ -4,6 +4,7 @@ import type { Id } from './_generated/dataModel';
 import { action } from './_generated/server';
 import { createInvoicePdf } from './lib/invoicePdf';
 import { sendTransactionalEmail } from './lib/sendTransactionalEmail';
+import { emailBrandLockup } from './emailTemplates';
 
 type PreparedInvoice = {
   bookingId: Id<'bookings'>;
@@ -118,7 +119,7 @@ export const sendInvoice = action({
       type: 'INVOICE',
       to,
       subject,
-      html: `<!doctype html><html lang="en"><body style="margin:0;background:#f3f7f6;font-family:Arial,sans-serif;color:#183837;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 12px;"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#fff;border:1px solid #dce8e5;border-radius:18px;overflow:hidden;"><tr><td style="background:#174c48;padding:26px 32px;color:#fff;"><div style="font-size:22px;font-weight:700;">WeDo Cleaning Services</div><div style="margin-top:4px;font-size:13px;color:#cce1de;">Professional cleaning, thoughtfully done.</div></td></tr><tr><td style="padding:32px;"><h1 style="margin:0 0 14px;font-size:26px;color:#123f3b;">Invoice ${escapeHtml(invoice.invoiceNumber)}</h1><p style="font-size:15px;line-height:1.7;color:#496663;">Hi ${greetingName},</p><p style="font-size:15px;line-height:1.7;color:#496663;">Your invoice is attached as a PDF. ${escapeHtml(paymentCopy)}</p><p style="margin-top:24px;font-size:13px;line-height:1.6;color:#67817e;">Please reply to this email if you have any questions.</p></td></tr></table></td></tr></table></body></html>`,
+      html: `<!doctype html><html lang="en"><body style="margin:0;background:#f3f7f6;font-family:Arial,sans-serif;color:#183837;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 12px;"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#fff;border:1px solid #dce8e5;border-radius:18px;overflow:hidden;"><tr><td style="background:#fff;padding:22px 32px;border-bottom:1px solid #dce8e5;">${emailBrandLockup()}</td></tr><tr><td style="padding:32px;"><h1 style="margin:0 0 14px;font-size:26px;color:#123f3b;">Invoice ${escapeHtml(invoice.invoiceNumber)}</h1><p style="font-size:15px;line-height:1.7;color:#496663;">Hi ${greetingName},</p><p style="font-size:15px;line-height:1.7;color:#496663;">Your invoice is attached as a PDF. ${escapeHtml(paymentCopy)}</p><p style="margin-top:24px;font-size:13px;line-height:1.6;color:#67817e;">Please reply to this email if you have any questions.</p></td></tr></table></td></tr></table></body></html>`,
       text: `Hi ${invoice.customerFirstName || invoice.customerName},\n\nYour invoice ${invoice.invoiceNumber} is attached as a PDF. ${paymentCopy}\n\nPlease reply to this email if you have any questions.`,
       customerId: invoice.customerId,
       bookingId: invoice.bookingId,

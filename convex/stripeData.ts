@@ -1,7 +1,12 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireRole } from "./lib/auth";
+import {
+  calculateQuotePaymentAmount,
+  convertAcceptedQuoteRecord,
+} from "./quoteRequests";
 
 export const prepareCheckout = internalQuery({
   args: { bookingId: v.id("bookings") },
@@ -266,6 +271,142 @@ export const markBalanceCheckoutFailed = internalMutation({
   },
 });
 
+export const prepareQuoteCheckout = internalMutation({
+  args: {
+    quoteRequestId: v.id("quoteRequests"),
+    paymentOption: v.union(v.literal("DEPOSIT"), v.literal("FULL")),
+    requestKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    if (!/^[0-9a-f-]{36}$/i.test(args.requestKey.trim())) {
+      throw new Error("The payment request identifier is invalid.");
+    }
+    const quote = await ctx.db.get(args.quoteRequestId);
+    if (!quote) throw new Error("Quote not found.");
+    if (quote.status !== "ACCEPTED") {
+      throw new Error("Mark the quote as accepted before requesting payment.");
+    }
+    if (quote.convertedBookingId) {
+      throw new Error("This quote has already been converted to a booking.");
+    }
+    if (!quote.serviceId || quote.estimatedTotalCents === undefined) {
+      throw new Error("The quote does not have a payable total.");
+    }
+    if (!quote.preferredDate || !quote.preferredTime) {
+      throw new Error("Add a scheduled date and time before requesting payment.");
+    }
+    const [customer, service, existing, previousPayments] = await Promise.all([
+      ctx.db.get(quote.customerId),
+      ctx.db.get(quote.serviceId),
+      ctx.db
+        .query("quotePayments")
+        .withIndex("by_request_key", (index) =>
+          index.eq("requestKey", args.requestKey.trim()),
+        )
+        .unique(),
+      ctx.db
+        .query("quotePayments")
+        .withIndex("by_quote_and_created_at", (index) =>
+          index.eq("quoteRequestId", quote._id),
+        )
+        .collect(),
+    ]);
+    if (!customer?.email) {
+      throw new Error("Add a customer email before sending a payment link.");
+    }
+    if (!service) throw new Error("The selected service no longer exists.");
+    const amountCents = calculateQuotePaymentAmount(
+      service,
+      quote.estimatedTotalCents,
+      args.paymentOption,
+    );
+    if (amountCents < 50) throw new Error("The payment amount is invalid.");
+    const now = Date.now();
+    const createdByName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "Admin";
+    const paymentId =
+      existing?._id ??
+      (await ctx.db.insert("quotePayments", {
+        quoteRequestId: quote._id,
+        paymentOption: args.paymentOption,
+        status: "PENDING",
+        amountCents,
+        requestKey: args.requestKey.trim(),
+        createdByUserId: user._id,
+        createdByName,
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+    const staleSessionIds: string[] = [];
+    for (const payment of previousPayments) {
+      if (payment.status === "PENDING" && payment._id !== paymentId) {
+        if (payment.checkoutSessionId) staleSessionIds.push(payment.checkoutSessionId);
+        await ctx.db.patch(payment._id, { status: "EXPIRED", updatedAt: now });
+      }
+    }
+    return {
+      paymentId,
+      existingCheckoutSessionId: existing?.checkoutSessionId,
+      alreadySent: Boolean(existing?.sentAt),
+      staleSessionIds,
+      quoteRequestId: quote._id,
+      quoteReference: quote.reference ?? String(quote._id),
+      customerId: customer._id,
+      customerEmail: customer.email,
+      customerFirstName: customer.firstName,
+      serviceName: service.name,
+      scheduledDate: quote.preferredDate,
+      address: [
+        quote.addressLine1,
+        quote.addressLine2,
+        `${quote.suburb} ${quote.state} ${quote.postcode}`,
+      ]
+        .filter(Boolean)
+        .join(", "),
+      totalAmountCents: quote.estimatedTotalCents,
+      amountCents,
+      paymentOption: args.paymentOption,
+    };
+  },
+});
+
+export const saveQuoteCheckoutSession = internalMutation({
+  args: {
+    paymentId: v.id("quotePayments"),
+    checkoutSessionId: v.string(),
+    sentTo: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.paymentId);
+    if (!payment) throw new Error("Quote payment request not found.");
+    const now = Date.now();
+    await ctx.db.patch(payment._id, {
+      checkoutSessionId: args.checkoutSessionId,
+      sentTo: args.sentTo,
+      sentAt: now,
+      updatedAt: now,
+    });
+    return null;
+  },
+});
+
+export const markQuoteCheckoutFailed = internalMutation({
+  args: { paymentId: v.id("quotePayments") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.paymentId);
+    if (payment?.status === "PENDING") {
+      await ctx.db.patch(payment._id, { status: "FAILED", updatedAt: Date.now() });
+    }
+    return null;
+  },
+});
+
 export const processCheckoutEvent = internalMutation({
   args: {
     eventId: v.string(),
@@ -282,6 +423,63 @@ export const processCheckoutEvent = internalMutation({
       .withIndex("by_event_id", (index) => index.eq("eventId", args.eventId))
       .unique();
     if (existingEvent) return { duplicate: true, bookingFound: true };
+
+    const confirmsPayment =
+      (args.eventType === "checkout.session.completed" ||
+        args.eventType === "checkout.session.async_payment_succeeded") &&
+      args.paymentStatus !== "unpaid";
+    const quotePayment = await ctx.db
+      .query("quotePayments")
+      .withIndex("by_checkout_session", (index) =>
+        index.eq("checkoutSessionId", args.checkoutSessionId),
+      )
+      .unique();
+    if (quotePayment) {
+      let bookingId: Id<"bookings"> | undefined;
+      if (confirmsPayment) {
+        const now = Date.now();
+        await ctx.db.patch(quotePayment._id, {
+          status: "PAID",
+          paymentIntentId: args.paymentIntentId,
+          paidAt: now,
+          updatedAt: now,
+        });
+        bookingId = await convertAcceptedQuoteRecord(ctx, {
+          quoteRequestId: quotePayment.quoteRequestId,
+          paymentOption: quotePayment.paymentOption,
+          paymentMode: "STRIPE_CHECKOUT",
+          amountPaidCents: quotePayment.amountCents,
+          paymentMethod: "STRIPE",
+          paymentIntentId: args.paymentIntentId,
+          checkoutSessionId: args.checkoutSessionId,
+          paymentRequestKey: `quote-payment:${quotePayment._id}`,
+        });
+      } else if (
+        args.eventType === "checkout.session.async_payment_failed" ||
+        args.eventType === "checkout.session.expired"
+      ) {
+        await ctx.db.patch(quotePayment._id, {
+          status:
+            args.eventType === "checkout.session.expired" ? "EXPIRED" : "FAILED",
+          updatedAt: Date.now(),
+        });
+      }
+      await ctx.db.insert("stripeEvents", {
+        eventId: args.eventId,
+        eventType: args.eventType,
+        status:
+          confirmsPayment ||
+          args.eventType === "checkout.session.async_payment_failed" ||
+          args.eventType === "checkout.session.expired"
+            ? "PROCESSED"
+            : "IGNORED",
+        checkoutSessionId: args.checkoutSessionId,
+        bookingId,
+        quoteRequestId: quotePayment.quoteRequestId,
+        createdAt: Date.now(),
+      });
+      return { duplicate: false, bookingFound: Boolean(bookingId) };
+    }
 
     const payment = await ctx.db
       .query("bookingPayments")
@@ -308,10 +506,6 @@ export const processCheckoutEvent = internalMutation({
       return { duplicate: false, bookingFound: false };
     }
 
-    const confirmsPayment =
-      (args.eventType === "checkout.session.completed" ||
-        args.eventType === "checkout.session.async_payment_succeeded") &&
-      args.paymentStatus !== "unpaid";
     const wasPendingPayment = booking.status === "PENDING_PAYMENT";
 
     if (confirmsPayment) {

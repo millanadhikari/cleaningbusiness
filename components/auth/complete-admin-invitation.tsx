@@ -2,11 +2,11 @@
 
 import { useAction, useConvexAuth } from 'convex/react';
 import { CircleAlert, LoaderCircle, ShieldCheck } from 'lucide-react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
+import { BrandLogo } from '@/components/brand-logo';
 
 export function CompleteAdminInvitation() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -45,14 +45,7 @@ export function CompleteAdminInvitation() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#f3f8f6] px-4 py-8 text-[#183e3b]">
       <section className="w-full max-w-md rounded-[28px] border border-[#dce8e3] bg-white p-8 text-center shadow-[0_24px_70px_rgba(20,47,54,0.12)] sm:p-10">
-        <Image
-          src="/wedo-logo.svg"
-          alt="WeDo Cleaning Services"
-          width={170}
-          height={52}
-          className="mx-auto"
-          priority
-        />
+        <BrandLogo className="mx-auto" priority />
 
         {error ? (
           <>

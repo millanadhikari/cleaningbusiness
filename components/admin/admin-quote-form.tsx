@@ -38,6 +38,32 @@ function inputValue(value: AnswerValue | undefined) {
   return typeof value === "string" || typeof value === "number" ? value : "";
 }
 
+function formatMoney(cents: number) {
+  return new Intl.NumberFormat("en-AU", {
+    style: "currency",
+    currency: "AUD",
+  }).format(cents / 100);
+}
+
+function pricingRuleLabel(rule: Doc<"servicePricingRules">) {
+  if (rule.ruleType === "BASE_PRICE") {
+    return `${formatMoney(rule.amount)} base price`;
+  }
+  if (rule.ruleType === "HOURLY_RATE") {
+    return `${formatMoney(rule.amount)} per hour${rule.minQuantity ? ` · ${rule.minQuantity}h minimum` : ""}`;
+  }
+  if (rule.ruleType === "PERCENTAGE") {
+    return `${rule.amount / 100}% adjustment`;
+  }
+  if (rule.ruleType === "FIXED_ADDON") {
+    return `${formatMoney(rule.amount)} add-on`;
+  }
+  if (rule.includedQuantity) {
+    return `${rule.includedQuantity} included · ${formatMoney(rule.amount)} each after`;
+  }
+  return `${formatMoney(rule.amount)} each`;
+}
+
 export function AdminQuoteForm({
   quoteRequestId,
 }: {
@@ -94,9 +120,18 @@ function AdminQuoteEditor({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const questions = useQuery(
-    api.services.getActiveServiceQuestions,
+  const serviceConfiguration = useQuery(
+    api.services.getAdminService,
     serviceId ? { serviceId: serviceId as Id<"services"> } : "skip",
+  );
+  const questions = serviceConfiguration?.questions.filter(
+    (question) => question.status === "ACTIVE",
+  );
+  const pricingRules = serviceConfiguration?.pricingRules.filter(
+    (rule) => rule.status === "ACTIVE",
+  );
+  const generalPricingRules = pricingRules?.filter(
+    (rule) => !rule.questionKey,
   );
 
   const customer = quote?.customer;
@@ -291,12 +326,48 @@ function AdminQuoteEditor({
                 />
               </div>
             ) : null}
-            {questions?.map((question) => (
+            {pricingSource === "SERVICE" && generalPricingRules?.length ? (
+              <div className="sm:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-900">
+                  Core pricing
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {generalPricingRules.map((rule) => (
+                    <span
+                      key={rule._id}
+                      className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-800"
+                    >
+                      {rule.name}: {pricingRuleLabel(rule)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {questions?.map((question) => {
+              const questionRules = pricingRules?.filter(
+                (rule) => rule.questionKey === question.key,
+              );
+              return (
               <div key={question.key} className="space-y-2">
-                <Label htmlFor={`answer-${question.key}`}>
-                  {question.label}
-                  {question.required && pricingSource === "SERVICE" ? " *" : ""}
-                </Label>
+                <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
+                  <Label htmlFor={`answer-${question.key}`}>
+                    {question.label}
+                    {question.required && pricingSource === "SERVICE" ? " *" : ""}
+                  </Label>
+                  {pricingSource === "SERVICE" && questionRules?.length ? (
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {questionRules.map((rule) => (
+                        <span
+                          key={rule._id}
+                          className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-200"
+                          title={rule.description}
+                        >
+                          {pricingRuleLabel(rule)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
                 {question.type === "BOOLEAN" ? (
                   <NativeSelect
                     id={`answer-${question.key}`}
@@ -408,7 +479,8 @@ function AdminQuoteEditor({
                   />
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </section>
 

@@ -756,7 +756,7 @@ export const get = query({
     await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
-    const [customer, service, bookingNotes, adjustments, payments] = await Promise.all([
+    const [customer, service, bookingNotes, adjustments, payments, emailLogs] = await Promise.all([
       ctx.db.get(booking.customerId),
       ctx.db.get(booking.serviceId),
       ctx.db
@@ -780,6 +780,10 @@ export const get = query({
         )
         .order("desc")
         .take(100),
+      ctx.db
+        .query("emailLogs")
+        .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
+        .collect(),
     ]);
     const assignedCleaners = (booking.assignedCleanerIds ?? [])
       .map((id) => mockCleaners.find((cleaner) => cleaner.id === id))
@@ -813,6 +817,10 @@ export const get = query({
       assignedCleaners,
       adjustments,
       payments,
+      invoiceEmails: emailLogs
+        .filter((email) => email.type === "INVOICE")
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 20),
       paymentSnapshot: {
         originalTotalCents,
         adjustmentsTotalCents,

@@ -8,6 +8,7 @@ import {
   Clock3,
   CreditCard,
   DollarSign,
+  Download,
   ExternalLink,
   FileText,
   ImageIcon,
@@ -122,6 +123,8 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
   const createBalanceCheckout = useAction(
     api.stripePayments.createBalanceCheckoutSession,
   );
+  const generateInvoice = useAction(api.invoices.generateInvoice);
+  const sendInvoice = useAction(api.invoices.sendInvoice);
   const [selectedCleaner, setSelectedCleaner] = useState("");
   const [assignmentBusy, setAssignmentBusy] = useState<string | null>(null);
   const [isSavingNote, setIsSavingNote] = useState(false);
@@ -134,6 +137,8 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
   const [isSavingAdjustment, setIsSavingAdjustment] = useState(false);
   const [isSavingManualPayment, setIsSavingManualPayment] = useState(false);
   const [isSendingPaymentLink, setIsSendingPaymentLink] = useState(false);
+  const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
+  const [isSendingInvoice, setIsSendingInvoice] = useState(false);
 
   async function handleUpdateDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -249,6 +254,68 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
       );
     } finally {
       setIsSendingPaymentLink(false);
+    }
+  }
+
+  function downloadBase64Pdf(contentBase64: string, filename: string) {
+    const binary = window.atob(contentBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    const url = URL.createObjectURL(
+      new Blob([bytes], { type: "application/pdf" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleGenerateInvoice() {
+    setIsGeneratingInvoice(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await generateInvoice({ bookingId });
+      downloadBase64Pdf(result.contentBase64, result.filename);
+      setMessage(`Invoice ${result.filename} generated.`);
+    } catch (invoiceError) {
+      setError(
+        invoiceError instanceof Error
+          ? invoiceError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to generate the invoice.",
+      );
+    } finally {
+      setIsGeneratingInvoice(false);
+    }
+  }
+
+  async function handleSendInvoice(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setIsSendingInvoice(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await sendInvoice({
+        bookingId,
+        to: String(data.get("invoiceEmail") ?? ""),
+      });
+      setMessage(
+        `Invoice emailed to ${result.sentTo} at ${date(result.sentAt, true)}.`,
+      );
+    } catch (invoiceError) {
+      setError(
+        invoiceError instanceof Error
+          ? invoiceError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to send the invoice.",
+      );
+    } finally {
+      setIsSendingInvoice(false);
     }
   }
 
@@ -1087,6 +1154,133 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                   ))}
                 </div>
               ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className={cardClass}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <FileText className="size-4 text-emerald-700" /> Invoice
+              </CardTitle>
+              <CardDescription>
+                Generate a fresh PDF from the current booking, adjustments and recorded payments. PDFs are not stored.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-3 gap-2 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3 text-center">
+                <div>
+                  <p className="text-[11px] text-slate-500">Total</p>
+                  <strong className="mt-1 block text-sm text-slate-900">
+                    {money(booking.paymentSnapshot.revisedTotalCents)}
+                  </strong>
+                </div>
+                <div className="border-x border-emerald-100 px-2">
+                  <p className="text-[11px] text-slate-500">Paid</p>
+                  <strong className="mt-1 block text-sm text-emerald-800">
+                    {money(booking.paymentSnapshot.amountPaidCents)}
+                  </strong>
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-500">Due</p>
+                  <strong className="mt-1 block text-sm text-slate-900">
+                    {money(booking.paymentSnapshot.balanceDueCents)}
+                  </strong>
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={isGeneratingInvoice || !booking.reference}
+                onClick={handleGenerateInvoice}
+              >
+                {isGeneratingInvoice ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Download />
+                )}
+                {isGeneratingInvoice ? "Generating…" : "Download invoice PDF"}
+              </Button>
+
+              <form
+                onSubmit={handleSendInvoice}
+                className="space-y-3 border-t border-slate-100 pt-4"
+              >
+                <div className="space-y-2">
+                  <Label htmlFor="invoice-email">Send invoice to</Label>
+                  <Input
+                    id="invoice-email"
+                    name="invoiceEmail"
+                    type="email"
+                    defaultValue={booking.customer?.email}
+                    placeholder="customer@example.com"
+                    required
+                  />
+                  <p className="text-xs leading-5 text-slate-500">
+                    You can change the recipient for this send without changing the customer record.
+                  </p>
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={isSendingInvoice || !booking.reference}
+                >
+                  {isSendingInvoice ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Send />
+                  )}
+                  {isSendingInvoice ? "Generating and sending…" : "Generate and send invoice"}
+                </Button>
+              </form>
+
+              {!booking.reference ? (
+                <p className="text-xs text-amber-700">
+                  This booking needs a WD reference before an invoice can be generated.
+                </p>
+              ) : null}
+
+              {booking.invoiceEmails.length ? (
+                <div className="space-y-2 border-t border-slate-100 pt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Invoice email history
+                  </p>
+                  {booking.invoiceEmails.slice(0, 5).map((email) => (
+                    <div
+                      key={email._id}
+                      className="rounded-xl bg-slate-50 p-3 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <strong className="min-w-0 truncate text-slate-700">
+                          {email.to}
+                        </strong>
+                        <Badge
+                          variant="secondary"
+                          className={
+                            email.status === "SENT"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : email.status === "FAILED"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-amber-100 text-amber-800"
+                          }
+                        >
+                          {label(email.status)}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-slate-500">
+                        {email.sentAt
+                          ? `Sent ${date(email.sentAt, true)}`
+                          : `Attempted ${date(email.createdAt, true)}`}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  No invoice has been emailed for this booking.
+                </p>
+              )}
             </CardContent>
           </Card>
 

@@ -102,7 +102,7 @@ function formatTime(value: string) {
 
 export function emailBrandLockup() {
   return `<table role="presentation" cellspacing="0" cellpadding="0"><tr>
-    <td style="padding-right:10px;vertical-align:middle;"><img src="https://wedocleaning.com.au/wedo-mark.png" width="54" height="57" alt="" style="display:block;width:54px;height:57px;object-fit:contain;"></td>
+    <td style="padding-right:10px;vertical-align:middle;"><img src="https://www.wedocleaning.com.au/wedo-mark.png" width="54" height="54" alt="WeDo Cleaning Services" style="display:block;width:54px;height:54px;border:0;outline:none;text-decoration:none;"></td>
     <td style="vertical-align:middle;"><div style="font-size:25px;font-weight:800;line-height:1;color:#16363b;letter-spacing:-1.2px;">We<span style="color:#008575;">Do</span></div><div style="margin-top:6px;font-size:7px;font-weight:700;line-height:1;letter-spacing:1.35px;color:#455e61;white-space:nowrap;">CLEANING SERVICES</div></td>
   </tr></table>`;
 }

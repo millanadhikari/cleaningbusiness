@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 import { requireRole } from "./lib/auth";
 import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
+import { ensurePublicSlotAvailable } from "./availability";
 
 const answerValue = v.union(
   v.number(),
@@ -207,6 +208,7 @@ export const createWebsiteBooking = mutation({
     if (!/^\d{4}$/.test(postcode))
       throw new Error("Postcode must contain four digits.");
     validateSchedule(args.scheduledDate, args.scheduledTime);
+    await ensurePublicSlotAvailable(ctx, args.scheduledDate, args.scheduledTime);
 
     const questions = (
       await ctx.db

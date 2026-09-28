@@ -70,17 +70,6 @@ type EstimateResult =
     };
 
 const australianStates = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"];
-const bookingTimes = [
-  "08:00",
-  "09:00",
-  "10:00",
-  "11:00",
-  "12:00",
-  "13:00",
-  "14:00",
-  "15:00",
-  "16:00",
-];
 const addonPresentation = {
   oven: {
     category: "Kitchen & appliances",
@@ -197,7 +186,7 @@ export function QuoteModal({
   const [date, setDate] = useState(() =>
     format(addDays(new Date(), 1), "yyyy-MM-dd"),
   );
-  const [scheduledTime, setScheduledTime] = useState("09:00");
+  const [scheduledTime, setScheduledTime] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -225,7 +214,7 @@ export function QuoteModal({
     setIsSubmitting(false);
     setError(null);
     setDate(format(addDays(new Date(), 1), "yyyy-MM-dd"));
-    setScheduledTime("09:00");
+    setScheduledTime("");
     setName("");
     setPhone("");
     setEmail("");
@@ -262,6 +251,17 @@ export function QuoteModal({
   const selectedService = services?.find(
     (service) => service._id === resolvedServiceId,
   );
+  const availabilityRange = useMemo(() => {
+    const today = new Date();
+    return {
+      fromDate: format(today, "yyyy-MM-dd"),
+      toDate: format(addDays(today, 120), "yyyy-MM-dd"),
+    };
+  }, []);
+  const availabilitySlots = useQuery(
+    api.availability.listPublic,
+    open ? availabilityRange : "skip",
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -281,20 +281,31 @@ export function QuoteModal({
     contentRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [open, step]);
 
+  const availableSlots = useMemo(
+    () => availabilitySlots?.filter((slot) => slot.remaining > 0) ?? [],
+    [availabilitySlots],
+  );
   const upcomingDates = useMemo(() => {
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    return Array.from({ length: 14 }, (_, index) => {
-      const value = addDays(today, index + 1);
+    const values = [...new Set(availableSlots.map((slot) => slot.date))].slice(0, 14);
+    return values.map((dateValue) => {
+      const value = parseISO(dateValue);
       return {
-        value: format(value, "yyyy-MM-dd"),
+        value: dateValue,
         weekday: format(value, "EEE"),
         day: format(value, "d"),
         month: format(value, "MMM"),
       };
     });
-  }, []);
-  const tomorrow = upcomingDates[0]?.value;
+  }, [availableSlots]);
+  const availableDateValues = useMemo(
+    () => [...new Set(availableSlots.map((slot) => slot.date))],
+    [availableSlots],
+  );
+  const availableTimes = useMemo(
+    () => availableSlots.filter((slot) => slot.date === date),
+    [availableSlots, date],
+  );
+  const tomorrow = availabilityRange.fromDate;
   const formattedDate = date
     ? format(parseISO(date), "EEE d MMM yyyy")
     : "Choose a date";
@@ -320,6 +331,8 @@ export function QuoteModal({
     address.trim() &&
     suburb.trim() &&
     /^\d{4}$/.test(postcode) &&
+    date &&
+    scheduledTime &&
     agreed,
   );
   const progressLabels =
@@ -394,6 +407,13 @@ export function QuoteModal({
   }
   function beginFlow(nextIntent: FlowIntent) {
     if (!estimate) return;
+    const selectedSlot = availableSlots.find(
+      (slot) => slot.date === date && slot.time === scheduledTime,
+    );
+    if (!selectedSlot && availableSlots[0]) {
+      setDate(availableSlots[0].date);
+      setScheduledTime(availableSlots[0].time);
+    }
     setIntent(nextIntent);
     if (nextIntent === "BOOKING" && estimate.type === "ESTIMATE")
       setPaymentOption(
@@ -748,9 +768,17 @@ export function QuoteModal({
                   scheduledTime={scheduledTime}
                   setScheduledTime={setScheduledTime}
                   date={date}
-                  setDate={setDate}
+                  setDate={(nextDate) => {
+                    setDate(nextDate);
+                    setScheduledTime(
+                      availableSlots.find((slot) => slot.date === nextDate)?.time ?? "",
+                    );
+                  }}
                   tomorrow={tomorrow}
                   upcomingDates={upcomingDates}
+                  availableDateValues={availableDateValues}
+                  availableTimes={availableTimes}
+                  availabilityLoading={availabilitySlots === undefined}
                   notes={notes}
                   setNotes={setNotes}
                   agreed={agreed}
@@ -1376,6 +1404,9 @@ function DetailsStep(props: {
     day: string;
     month: string;
   }>;
+  availableDateValues: string[];
+  availableTimes: Array<{ time: string; remaining: number }>;
+  availabilityLoading: boolean;
   notes: string;
   setNotes: (v: string) => void;
   agreed: boolean;
@@ -1392,7 +1423,7 @@ function DetailsStep(props: {
         }
         copy={
           props.intent === "BOOKING"
-            ? "We’ll confirm availability after your booking is received."
+            ? "Choose from the live appointment times currently available."
             : "We’ll use these details to follow up on your request."
         }
       />
@@ -1477,10 +1508,14 @@ function DetailsStep(props: {
             <select
               value={props.scheduledTime}
               onChange={(event) => props.setScheduledTime(event.target.value)}
+              disabled={props.availabilityLoading || props.availableTimes.length === 0}
             >
-              {bookingTimes.map((item) => (
-                <option key={item} value={item}>
-                  {formatTime(item)}
+              {props.availableTimes.length === 0 && (
+                <option value="">No times available</option>
+              )}
+              {props.availableTimes.map((item) => (
+                <option key={item.time} value={item.time}>
+                  {formatTime(item.time)}{item.remaining > 1 ? ` · ${item.remaining} spots` : ""}
                 </option>
               ))}
             </select>
@@ -1493,9 +1528,12 @@ function DetailsStep(props: {
           <CalendarDays />
           Requested date
         </span>
-        <small>Availability will be confirmed</small>
+        <small>Live booking availability</small>
       </div>
       <div className={styles.dates}>
+        {!props.availabilityLoading && props.upcomingDates.length === 0 && (
+          <p>There are no appointment times available in this period. Please request a call and we’ll help arrange a time.</p>
+        )}
         {props.upcomingDates.map((item) => (
           <button
             type="button"
@@ -1521,9 +1559,12 @@ function DetailsStep(props: {
           type="date"
           min={props.tomorrow}
           value={props.date}
-          onChange={(event) =>
-            event.target.value && props.setDate(event.target.value)
-          }
+          onChange={(event) => {
+            const nextDate = event.target.value;
+            if (!nextDate || !props.availableDateValues.includes(nextDate)) return;
+            props.setDate(nextDate);
+          }}
+          disabled={props.upcomingDates.length === 0}
         />
       </label>
       <label className={styles.field}>

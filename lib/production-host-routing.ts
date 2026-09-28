@@ -6,6 +6,9 @@ const APP_ROUTE_PREFIXES = [
   '/sign-in',
   '/accept-invitation',
   '/admin-invitation-complete',
+  '/cleaner-invitation',
+  '/cleaner-invitation-complete',
+  '/cleaner',
   '/__clerk',
 ];
 
@@ -16,10 +19,26 @@ function matchesRoutePrefix(pathname: string, prefix: string) {
 export function getProductionRedirectUrl(requestUrl: URL): URL | null {
   const { hostname, pathname } = requestUrl;
 
+  // Static assets must remain available on both production hosts. This also
+  // allows Next Image on the app domain to fetch its local source image.
+  if (
+    pathname.startsWith('/_next/') ||
+    pathname.startsWith('/images/') ||
+    pathname.startsWith('/fonts/') ||
+    /\.[a-z0-9]+$/i.test(pathname)
+  ) {
+    return null;
+  }
+
   if (
     hostname === PUBLIC_PRODUCTION_HOST &&
     (matchesRoutePrefix(pathname, '/admin') ||
-      matchesRoutePrefix(pathname, '/sign-in'))
+      matchesRoutePrefix(pathname, '/sign-in') ||
+      matchesRoutePrefix(pathname, '/accept-invitation') ||
+      matchesRoutePrefix(pathname, '/admin-invitation-complete') ||
+      matchesRoutePrefix(pathname, '/cleaner-invitation') ||
+      matchesRoutePrefix(pathname, '/cleaner-invitation-complete') ||
+      matchesRoutePrefix(pathname, '/cleaner'))
   ) {
     const redirectUrl = new URL(requestUrl);
     redirectUrl.protocol = 'https:';

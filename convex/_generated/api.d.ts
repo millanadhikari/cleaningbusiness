@@ -9,9 +9,11 @@
  */
 
 import type * as adminInvitations from "../adminInvitations.js";
+import type * as availability from "../availability.js";
 import type * as blogs from "../blogs.js";
 import type * as bookings from "../bookings.js";
 import type * as bootstrap from "../bootstrap.js";
+import type * as calendar from "../calendar.js";
 import type * as cleanerPortal from "../cleanerPortal.js";
 import type * as cleaners from "../cleaners.js";
 import type * as customers from "../customers.js";
@@ -42,9 +44,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   adminInvitations: typeof adminInvitations;
+  availability: typeof availability;
   blogs: typeof blogs;
   bookings: typeof bookings;
   bootstrap: typeof bootstrap;
+  calendar: typeof calendar;
   cleanerPortal: typeof cleanerPortal;
   cleaners: typeof cleaners;
   customers: typeof customers;

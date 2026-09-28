@@ -278,6 +278,15 @@ export default defineSchema({
     .index("by_stripe_checkout_session_id", ["stripeCheckoutSessionId"])
     .index("by_scheduled_date", ["scheduledDate"])
     .index("by_created_at", ["createdAt"]),
+  publicAvailabilityBlocks: defineTable({
+    date: v.string(),
+    time: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    createdByUserId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_date", ["date"])
+    .index("by_date_and_time", ["date", "time"]),
   bookingCleanerAssignments: defineTable({
     bookingId: v.id("bookings"),
     cleanerId: v.id("cleaners"),

@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   Home,
+  Gauge,
   LayoutDashboard,
   Menu,
   PanelLeftClose,
@@ -82,6 +83,12 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
         icon: ShieldCheck,
         superAdminOnly: true,
       },
+      {
+        href: '/admin/usage',
+        label: 'Platform Usage',
+        icon: Gauge,
+        superAdminOnly: true,
+      },
       { href: '/admin/settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -97,6 +104,7 @@ const pageTitles: Record<string, string> = {
   '/admin/calendar': 'Calendar',
   '/admin/cleaners': 'Cleaning Team',
   '/admin/users': 'Admin Users',
+  '/admin/usage': 'Platform Usage',
   '/admin/settings': 'Settings',
 };
 

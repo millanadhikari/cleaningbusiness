@@ -2,20 +2,30 @@
 
 import { useConvexAuth, useMutation, useQuery } from 'convex/react';
 import {
-  BriefcaseBusiness,
+  CalendarDays,
+  ChevronRight,
   LoaderCircle,
-  Mail,
   Pencil,
-  Phone,
   Plus,
-  Search,
   Trash2,
   UserRoundCheck,
 } from 'lucide-react';
+import Link from 'next/link';
 import { type FormEvent, useMemo, useState } from 'react';
 import { api } from '@/convex/_generated/api';
 import type { Doc } from '@/convex/_generated/dataModel';
-import { AdminListHeader, AdminListPage } from './admin-list-layout';
+import {
+  AdminEmpty,
+  AdminListHeader,
+  AdminListPage,
+  AdminListPagination,
+  AdminListToolbar,
+  AdminLoading,
+  AdminTableCard,
+  FilterSelect,
+  LIST_PAGE_SIZE,
+  PersonCell,
+} from './admin-list-layout';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,16 +50,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 type Cleaner = Doc<'cleaners'>;
 type Feedback = { kind: 'success' | 'error'; text: string } | null;
 
 function fullName(cleaner: Cleaner) {
   return `${cleaner.firstName} ${cleaner.lastName}`;
-}
-
-function initials(cleaner: Cleaner) {
-  return `${cleaner.firstName[0] ?? ''}${cleaner.lastName[0] ?? ''}`.toUpperCase();
 }
 
 function readableError(error: unknown, fallback: string) {
@@ -65,6 +79,8 @@ export function CleanersManager() {
   const updateCleaner = useMutation(api.cleaners.update);
   const removeCleaner = useMutation(api.cleaners.remove);
   const [search, setSearch] = useState('');
+  const [status, setStatus] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [page, setPage] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCleaner, setEditingCleaner] = useState<Cleaner | null>(null);
   const [deletingCleaner, setDeletingCleaner] = useState<Cleaner | null>(null);
@@ -74,8 +90,10 @@ export function CleanersManager() {
 
   const filteredCleaners = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!cleaners || !query) return cleaners ?? [];
+    if (!cleaners) return [];
     return cleaners.filter((cleaner) =>
+      (status === 'ALL' || cleaner.status === status) &&
+      (!query ||
       [
         cleaner.firstName,
         cleaner.lastName,
@@ -86,9 +104,26 @@ export function CleanersManager() {
         cleaner.status,
       ]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query)),
+        .some((value) => String(value).toLowerCase().includes(query))),
     );
-  }, [cleaners, search]);
+  }, [cleaners, search, status]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredCleaners.length / LIST_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const visibleCleaners = filteredCleaners.slice(
+    (safePage - 1) * LIST_PAGE_SIZE,
+    safePage * LIST_PAGE_SIZE,
+  );
+
+  function updateSearch(value: string) {
+    setSearch(value);
+    setPage(1);
+  }
+
+  function updateStatus(value: string) {
+    setStatus(value as typeof status);
+    setPage(1);
+  }
 
   function openCreate() {
     setEditingCleaner(null);
@@ -196,108 +231,80 @@ export function CleanersManager() {
         </p>
       ) : null}
 
-      <div className="flex min-h-12 items-center gap-3 rounded-2xl border border-[#dfe9e3] bg-white p-3 shadow-sm">
-        <Search className="ml-1 size-4 text-slate-400" />
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search cleaners by name, email, phone or specialty"
-          aria-label="Search cleaners"
-          className="border-0 bg-transparent shadow-none focus-visible:ring-0"
-        />
-      </div>
+      <AdminListToolbar
+        search={search}
+        onSearch={updateSearch}
+        placeholder="Search name, email, phone or specialty"
+      >
+        <FilterSelect label="Status" value={status} onChange={updateStatus}>
+          <option value="ALL">All statuses</option>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </FilterSelect>
+      </AdminListToolbar>
 
       {cleaners === undefined ? (
-        <div className="flex min-h-52 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white text-sm text-slate-500">
-          <LoaderCircle className="size-4 animate-spin" /> Loading team…
-        </div>
-      ) : filteredCleaners.length ? (
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filteredCleaners.map((cleaner) => (
-            <article
-              key={cleaner._id}
-              className="flex min-h-64 flex-col rounded-2xl border border-[#dfe9e3] bg-white p-5 shadow-[0_5px_24px_rgba(20,47,54,0.03)]"
-            >
-              <div className="flex items-start gap-3">
-                <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#007c70] text-sm font-bold text-white">
-                  {initials(cleaner)}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <h3 className="truncate font-semibold text-[#173c38]">
-                    {fullName(cleaner)}
-                  </h3>
-                  <p className="mt-1 truncate text-xs text-slate-500">
-                    {cleaner.specialty || 'General cleaning'}
-                  </p>
-                </div>
-                <Badge
-                  variant="secondary"
-                  className={
-                    cleaner.status === 'ACTIVE'
-                      ? 'bg-emerald-50 text-emerald-800'
-                      : 'bg-slate-100 text-slate-600'
-                  }
-                >
-                  {cleaner.status === 'ACTIVE' ? 'Active' : 'Inactive'}
-                </Badge>
-              </div>
-
-              <div className="mt-5 space-y-2.5 text-sm text-slate-600">
-                {cleaner.email ? (
-                  <a href={`mailto:${cleaner.email}`} className="flex items-center gap-2 hover:text-emerald-800">
-                    <Mail className="size-4 text-emerald-700" />
-                    <span className="truncate">{cleaner.email}</span>
-                  </a>
-                ) : (
-                  <p className="flex items-center gap-2 text-slate-400">
-                    <Mail className="size-4" /> No email added
-                  </p>
-                )}
-                <a href={`tel:${cleaner.phone}`} className="flex items-center gap-2 hover:text-emerald-800">
-                  <Phone className="size-4 text-emerald-700" /> {cleaner.phone}
-                </a>
-                <p className="flex items-center gap-2">
-                  <BriefcaseBusiness className="size-4 text-emerald-700" />
-                  {cleaner.engagementType === 'EMPLOYEE' ? 'Employee' : 'Contractor'}
-                </p>
-              </div>
-
-              {cleaner.notes ? (
-                <p className="mt-4 line-clamp-2 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                  {cleaner.notes}
-                </p>
-              ) : null}
-
-              <div className="mt-auto flex gap-2 border-t border-slate-100 pt-4">
-                <Button type="button" variant="outline" size="sm" className="flex-1" onClick={() => openEdit(cleaner)}>
-                  <Pencil /> Edit
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="text-red-700 hover:bg-red-50 hover:text-red-800"
-                  onClick={() => setDeletingCleaner(cleaner)}
-                  aria-label={`Delete ${fullName(cleaner)}`}
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            </article>
-          ))}
-        </section>
+        <AdminLoading label="Loading cleaning team…" />
+      ) : visibleCleaners.length ? (
+        <AdminTableCard>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Cleaner</TableHead>
+                <TableHead>Contact</TableHead>
+                <TableHead>Engagement</TableHead>
+                <TableHead>Availability</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visibleCleaners.map((cleaner) => {
+                const availableDays = cleaner.availability?.filter((entry) => entry.available).length ?? 0;
+                return (
+                  <TableRow key={cleaner._id}>
+                    <TableCell>
+                      <Link href={`/admin/cleaners/${cleaner._id}`} className="block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-emerald-600">
+                        <PersonCell name={fullName(cleaner)} detail={cleaner.specialty || 'General cleaning'} />
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-56">
+                        <p className="truncate text-slate-700">{cleaner.email || 'No email'}</p>
+                        <p className="mt-1 text-xs text-slate-500">{cleaner.phone}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell>{cleaner.engagementType === 'EMPLOYEE' ? 'Employee' : 'Contractor'}</TableCell>
+                    <TableCell>
+                      <span className="inline-flex items-center gap-1.5 text-slate-600">
+                        <CalendarDays className="size-4 text-emerald-700" />
+                        {cleaner.availability ? `${availableDays} days` : 'Not set'}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className={cleaner.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}>
+                        {cleaner.status === 'ACTIVE' ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button type="button" variant="ghost" size="icon" onClick={() => openEdit(cleaner)} aria-label={`Edit ${fullName(cleaner)}`}><Pencil /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="text-red-700 hover:bg-red-50 hover:text-red-800" onClick={() => setDeletingCleaner(cleaner)} aria-label={`Delete ${fullName(cleaner)}`}><Trash2 /></Button>
+                        <Button asChild variant="ghost" size="icon"><Link href={`/admin/cleaners/${cleaner._id}`} aria-label={`Open ${fullName(cleaner)}`}><ChevronRight /></Link></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+          <AdminListPagination page={safePage} total={filteredCleaners.length} onPage={setPage} />
+        </AdminTableCard>
       ) : (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
-          <UserRoundCheck className="mx-auto size-8 text-slate-300" />
-          <h3 className="mt-4 font-semibold text-slate-800">
-            {search ? 'No cleaners match your search' : 'No cleaners added yet'}
-          </h3>
-          <p className="mt-2 text-sm text-slate-500">
-            {search
-              ? 'Try another name, contact detail or specialty.'
-              : 'Add your first cleaner to begin assigning bookings.'}
-          </p>
-        </div>
+        <AdminEmpty
+          title={search || status !== 'ALL' ? 'No cleaners match these filters' : 'No cleaners added yet'}
+          description={search || status !== 'ALL' ? 'Try another search or status.' : 'Add your first cleaner to begin assigning bookings.'}
+        />
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

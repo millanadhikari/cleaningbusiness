@@ -7,6 +7,8 @@ const emailType = v.union(
   v.literal("QUOTE_PAYMENT_LINK"),
   v.literal("BOOKING_PAYMENT_LINK"),
   v.literal("INVOICE"),
+  v.literal("CLEANER_INVITATION"),
+  v.literal("CLEANER_JOB_ASSIGNED"),
 );
 
 export const createPendingLog = internalMutation({
@@ -17,6 +19,7 @@ export const createPendingLog = internalMutation({
     customerId: v.optional(v.id("customers")),
     bookingId: v.optional(v.id("bookings")),
     quoteRequestId: v.optional(v.id("quoteRequests")),
+    cleanerId: v.optional(v.id("cleaners")),
   },
   returns: v.id("emailLogs"),
   handler: async (ctx, args) =>

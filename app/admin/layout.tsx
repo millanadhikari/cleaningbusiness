@@ -9,7 +9,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   await auth.protect();
   const token = await getConvexAuthToken();
   const user = await fetchQuery(
-    api.users.current,
+    api.users.currentAdmin,
     {},
     { token: token ?? undefined },
   );

@@ -42,6 +42,18 @@ type QuotePaymentLinkInput = {
   checkoutUrl: string;
 };
 
+type CleanerJobAssignedInput = {
+  cleanerFirstName: string;
+  bookingReference: string;
+  serviceName: string;
+  customerName: string;
+  customerPhone: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  address: string;
+  jobUrl: string;
+};
+
 type EmailTemplate = {
   subject: string;
   html: string;
@@ -127,6 +139,32 @@ function detailRow(label: string, value: string) {
     <td style="padding:9px 12px 9px 0;color:#67817e;font-size:13px;vertical-align:top;">${escapeHtml(label)}</td>
     <td style="padding:9px 0;color:#183837;font-size:14px;font-weight:600;text-align:right;vertical-align:top;">${escapeHtml(value)}</td>
   </tr>`;
+}
+
+export function cleanerJobAssignedEmail(
+  input: CleanerJobAssignedInput,
+): EmailTemplate {
+  const subject = `New cleaning job assigned — ${input.bookingReference}`;
+  const content = `
+    <h1 style="margin:0 0 14px;font-size:26px;line-height:1.25;color:#123f3b;">A new job has been assigned to you</h1>
+    <p style="margin:0 0 22px;font-size:15px;line-height:1.7;color:#496663;">Hi ${escapeHtml(input.cleanerFirstName)}, a new cleaning job is waiting for you in the cleaner portal. Review the details and accept or decline the job.</p>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border-top:1px solid #dce8e5;border-bottom:1px solid #dce8e5;">
+      ${detailRow("Booking reference", input.bookingReference)}
+      ${detailRow("Service", input.serviceName)}
+      ${detailRow("Customer", input.customerName)}
+      ${detailRow("Customer phone", input.customerPhone)}
+      ${detailRow("Date", formatDate(input.scheduledDate))}
+      ${detailRow("Time", formatTime(input.scheduledTime))}
+      ${detailRow("Address", input.address)}
+    </table>
+    <p style="margin:24px 0;text-align:center;"><a href="${escapeHtml(input.jobUrl)}" style="display:inline-block;border-radius:10px;background:#174c48;padding:14px 24px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;">Review assigned job</a></p>
+    <p style="margin:0;font-size:13px;line-height:1.6;color:#67817e;">Please open the cleaner portal to respond to this job assignment.</p>`;
+
+  return {
+    subject,
+    html: layout(subject, content),
+    text: `Hi ${input.cleanerFirstName},\n\nA new cleaning job has been assigned to you. Review it in the cleaner portal and accept or decline the job.\n\nBooking reference: ${input.bookingReference}\nService: ${input.serviceName}\nCustomer: ${input.customerName}\nCustomer phone: ${input.customerPhone}\nDate: ${formatDate(input.scheduledDate)}\nTime: ${formatTime(input.scheduledTime)}\nAddress: ${input.address}\n\nReview assigned job: ${input.jobUrl}`,
+  };
 }
 
 export function bookingConfirmationEmail(

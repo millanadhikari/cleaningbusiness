@@ -19,6 +19,23 @@ const paymentOption = v.union(
 
 const noteKind = v.union(v.literal("ADMIN_NOTE"), v.literal("JOB_NOTE"));
 
+function cleanerJobUrl(appOrigin: string, bookingId: string) {
+  let origin: URL;
+  try {
+    origin = new URL(appOrigin);
+  } catch {
+    throw new Error("The application URL is invalid.");
+  }
+  const isAllowed = origin.hostname === "app.wedocleaning.com.au" ||
+    origin.hostname.endsWith(".vercel.app") ||
+    origin.hostname === "localhost" ||
+    origin.hostname === "127.0.0.1";
+  const safeProtocol = origin.protocol === "https:" ||
+    ((origin.hostname === "localhost" || origin.hostname === "127.0.0.1") && origin.protocol === "http:");
+  if (!isAllowed || !safeProtocol) throw new Error("The application URL is not approved.");
+  return new URL(`/cleaner/jobs/${bookingId}`, origin.origin).toString();
+}
+
 function validatePhotoUrls(values: string[] | undefined) {
   if (!values?.length) return undefined;
   if (values.length > 8) throw new Error("Add no more than eight photo links.");
@@ -637,6 +654,7 @@ export const setCleanerAssignment = mutation({
     bookingId: v.id("bookings"),
     cleanerId: v.id("cleaners"),
     assigned: v.boolean(),
+    appOrigin: v.string(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -655,12 +673,39 @@ export const setCleanerAssignment = mutation({
       if (cleaner.status !== "ACTIVE") {
         throw new Error("Only active cleaners can be assigned.");
       }
+      if (!cleaner.email) {
+        throw new Error("Add an email address to the cleaner before assigning this job.");
+      }
       if (!existing) {
         await ctx.db.insert("bookingCleanerAssignments", {
           bookingId: booking._id,
           cleanerId: cleaner._id,
           assignedByUserId: user._id,
           assignedAt: Date.now(),
+          status: "OFFERED",
+        });
+        const [customer, service] = await Promise.all([
+          ctx.db.get(booking.customerId),
+          ctx.db.get(booking.serviceId),
+        ]);
+        await ctx.scheduler.runAfter(0, internal.emails.sendCleanerJobAssigned, {
+            bookingId: booking._id,
+            cleanerId: cleaner._id,
+            customerId: booking.customerId,
+            to: cleaner.email,
+            cleanerFirstName: cleaner.firstName,
+            bookingReference: booking.reference ?? String(booking._id),
+            serviceName: service?.name ?? "Cleaning service",
+            customerName: customer
+              ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
+              : "Customer",
+            customerPhone: customer?.phone ?? "Not provided",
+            scheduledDate: booking.scheduledDate,
+            scheduledTime: booking.scheduledTime,
+            address: [booking.addressLine1, booking.addressLine2, booking.suburb, booking.state, booking.postcode]
+              .filter(Boolean)
+              .join(", "),
+            jobUrl: cleanerJobUrl(args.appOrigin, String(booking._id)),
         });
       }
     } else if (existing) {
@@ -779,15 +824,18 @@ export const get = query({
         .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
         .collect(),
     ]);
-    const assignedCleanerDocuments = await Promise.all(
-      cleanerAssignments.map((assignment) => ctx.db.get(assignment.cleanerId)),
-    );
-    const assignedCleaners = assignedCleanerDocuments
-      .filter((cleaner) => cleaner !== null)
-      .map((cleaner) => ({
-        ...cleaner,
-        name: `${cleaner.firstName} ${cleaner.lastName}`,
-      }));
+    const assignedCleaners = (
+      await Promise.all(
+        cleanerAssignments.map(async (assignment) => {
+          const cleaner = await ctx.db.get(assignment.cleanerId);
+          return cleaner ? {
+            ...cleaner,
+            name: `${cleaner.firstName} ${cleaner.lastName}`,
+            assignmentStatus: assignment.status ?? 'ACCEPTED',
+          } : null;
+        }),
+      )
+    ).filter((cleaner): cleaner is NonNullable<typeof cleaner> => cleaner !== null);
     const adjustmentsTotalCents = adjustments.reduce(
       (total, adjustment) => total + adjustment.amountCents,
       0,

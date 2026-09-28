@@ -11,14 +11,17 @@ export type DeliveryInput = {
     | "QUOTE_REQUEST_RECEIVED"
     | "QUOTE_PAYMENT_LINK"
     | "BOOKING_PAYMENT_LINK"
-    | "INVOICE";
+    | "INVOICE"
+    | "CLEANER_INVITATION"
+    | "CLEANER_JOB_ASSIGNED";
   to: string;
   subject: string;
   html: string;
   text: string;
-  customerId: Id<"customers">;
+  customerId?: Id<"customers">;
   bookingId?: Id<"bookings">;
   quoteRequestId?: Id<"quoteRequests">;
+  cleanerId?: Id<"cleaners">;
   attachments?: Array<{
     filename: string;
     content: string;
@@ -56,6 +59,7 @@ export async function sendTransactionalEmail(
       customerId: input.customerId,
       bookingId: input.bookingId,
       quoteRequestId: input.quoteRequestId,
+      cleanerId: input.cleanerId,
     },
   );
 

@@ -326,7 +326,12 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
     setAssignmentBusy(cleanerId);
     setError(null);
     try {
-      await setAssignment({ bookingId, cleanerId, assigned });
+      await setAssignment({
+        bookingId,
+        cleanerId,
+        assigned,
+        appOrigin: window.location.origin,
+      });
       if (assigned) setSelectedCleaner("");
     } catch (assignmentError) {
       setError(
@@ -748,6 +753,9 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
                         </p>
                         <p className="truncate text-xs text-slate-500">
                           {cleaner.specialty ?? label(cleaner.engagementType)}
+                        </p>
+                        <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                          {cleaner.assignmentStatus.replace('_', ' ')}
                         </p>
                       </div>
                       <button

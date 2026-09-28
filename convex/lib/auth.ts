@@ -45,3 +45,15 @@ export async function requireRole(
 export function requireSuperAdmin(ctx: AuthContext): Promise<Doc<'users'>> {
   return requireRole(ctx, ['SUPER_ADMIN']);
 }
+
+export async function requireCleaner(ctx: AuthContext) {
+  const user = await requireRole(ctx, ['CLEANER']);
+  const cleaner = await ctx.db
+    .query('cleaners')
+    .withIndex('by_user', (query) => query.eq('userId', user._id))
+    .unique();
+  if (!cleaner || cleaner.status !== 'ACTIVE') {
+    throw new Error('Cleaner profile is unavailable or inactive.');
+  }
+  return { user, cleaner };
+}

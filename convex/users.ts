@@ -2,7 +2,12 @@ import { v } from 'convex/values';
 import { internalMutation, internalQuery, mutation, query } from './_generated/server';
 import { requireSuperAdmin, requireUser } from './lib/auth';
 
-const userRole = v.union(v.literal('SUPER_ADMIN'), v.literal('ADMIN'));
+const userRole = v.union(
+  v.literal('SUPER_ADMIN'),
+  v.literal('ADMIN'),
+  v.literal('CLEANER'),
+);
+const adminRole = v.union(v.literal('SUPER_ADMIN'), v.literal('ADMIN'));
 const userStatus = v.union(v.literal('ACTIVE'), v.literal('INACTIVE'));
 
 export const current = query({
@@ -24,6 +29,26 @@ export const current = query({
   },
 });
 
+export const currentAdmin = query({
+  args: {},
+  returns: v.object({
+    name: v.string(),
+    email: v.optional(v.string()),
+    role: adminRole,
+  }),
+  handler: async (ctx) => {
+    const user = await requireUser(ctx);
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN') {
+      throw new Error('Admin access required.');
+    }
+    return {
+      name: [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || 'Admin',
+      email: user.email,
+      role: user.role,
+    };
+  },
+});
+
 export const listInternalUsers = query({
   args: {},
   returns: v.array(
@@ -33,7 +58,7 @@ export const listInternalUsers = query({
       firstName: v.optional(v.string()),
       lastName: v.optional(v.string()),
       email: v.optional(v.string()),
-      role: userRole,
+      role: adminRole,
       status: userStatus,
       createdAt: v.number(),
     }),
@@ -41,7 +66,10 @@ export const listInternalUsers = query({
   handler: async (ctx) => {
     await requireSuperAdmin(ctx);
 
-    const users = await ctx.db.query('users').order('desc').collect();
+    const users = (await ctx.db.query('users').order('desc').collect()).filter(
+      (user): user is typeof user & { role: 'SUPER_ADMIN' | 'ADMIN' } =>
+        user.role === 'SUPER_ADMIN' || user.role === 'ADMIN',
+    );
 
     return users.map((user) => ({
       _id: user._id,
@@ -245,6 +273,9 @@ export const setAdminStatus = mutation({
 
     if (targetUser.role === 'SUPER_ADMIN') {
       throw new Error('Super Admin accounts cannot be changed here.');
+    }
+    if (targetUser.role !== 'ADMIN') {
+      throw new Error('Only Admin accounts can be changed here.');
     }
 
     await ctx.db.patch(targetUser._id, {

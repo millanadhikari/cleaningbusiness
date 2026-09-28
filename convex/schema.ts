@@ -7,7 +7,11 @@ export default defineSchema({
     firstName: v.optional(v.string()),
     lastName: v.optional(v.string()),
     email: v.optional(v.string()),
-    role: v.union(v.literal("SUPER_ADMIN"), v.literal("ADMIN")),
+    role: v.union(
+      v.literal("SUPER_ADMIN"),
+      v.literal("ADMIN"),
+      v.literal("CLEANER"),
+    ),
     status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -60,11 +64,48 @@ export default defineSchema({
       v.literal("CONTRACTOR"),
     ),
     status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
+    availability: v.optional(
+      v.array(
+        v.object({
+          day: v.union(
+            v.literal("MONDAY"),
+            v.literal("TUESDAY"),
+            v.literal("WEDNESDAY"),
+            v.literal("THURSDAY"),
+            v.literal("FRIDAY"),
+            v.literal("SATURDAY"),
+            v.literal("SUNDAY"),
+          ),
+          available: v.boolean(),
+          startTime: v.optional(v.string()),
+          endTime: v.optional(v.string()),
+        }),
+      ),
+    ),
+    invitationSentAt: v.optional(v.number()),
+    invitationEmail: v.optional(v.string()),
+    clerkInvitationId: v.optional(v.string()),
+    invitationExpiresAt: v.optional(v.number()),
+    invitationAcceptedAt: v.optional(v.number()),
+    userId: v.optional(v.id("users")),
+    onboardingStatus: v.optional(
+      v.union(
+        v.literal("INVITED"),
+        v.literal("IN_PROGRESS"),
+        v.literal("COMPLETED"),
+      ),
+    ),
+    onboardingCompletedAt: v.optional(v.number()),
+    homeAddress: v.optional(v.string()),
+    serviceArea: v.optional(v.string()),
+    emergencyContactName: v.optional(v.string()),
+    emergencyContactPhone: v.optional(v.string()),
     notes: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_email", ["email"])
+    .index("by_user", ["userId"])
     .index("by_status", ["status"])
     .index("by_created_at", ["createdAt"]),
   quoteRequests: defineTable({
@@ -242,6 +283,18 @@ export default defineSchema({
     cleanerId: v.id("cleaners"),
     assignedByUserId: v.id("users"),
     assignedAt: v.number(),
+    status: v.optional(
+      v.union(
+        v.literal("OFFERED"),
+        v.literal("ACCEPTED"),
+        v.literal("DECLINED"),
+        v.literal("IN_PROGRESS"),
+        v.literal("COMPLETED"),
+      ),
+    ),
+    respondedAt: v.optional(v.number()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
   })
     .index("by_booking", ["bookingId"])
     .index("by_cleaner", ["cleanerId"])
@@ -287,6 +340,8 @@ export default defineSchema({
       v.literal("QUOTE_PAYMENT_LINK"),
       v.literal("BOOKING_PAYMENT_LINK"),
       v.literal("INVOICE"),
+      v.literal("CLEANER_INVITATION"),
+      v.literal("CLEANER_JOB_ASSIGNED"),
     ),
     to: v.string(),
     subject: v.string(),
@@ -298,6 +353,7 @@ export default defineSchema({
     customerId: v.optional(v.id("customers")),
     bookingId: v.optional(v.id("bookings")),
     quoteRequestId: v.optional(v.id("quoteRequests")),
+    cleanerId: v.optional(v.id("cleaners")),
     providerMessageId: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
     createdAt: v.number(),
@@ -306,6 +362,7 @@ export default defineSchema({
     .index("by_booking", ["bookingId"])
     .index("by_quote_request", ["quoteRequestId"])
     .index("by_customer", ["customerId"])
+    .index("by_cleaner", ["cleanerId"])
     .index("by_created_at", ["createdAt"]),
   bookingNotes: defineTable({
     bookingId: v.id("bookings"),

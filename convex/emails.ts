@@ -3,10 +3,44 @@ import { internalAction } from "./_generated/server";
 import {
   bookingConfirmationEmail,
   bookingPaymentLinkEmail,
+  cleanerJobAssignedEmail,
   quotePaymentLinkEmail,
   quoteRequestReceivedEmail,
 } from "./emailTemplates";
 import { sendTransactionalEmail } from "./lib/sendTransactionalEmail";
+
+export const sendCleanerJobAssigned = internalAction({
+  args: {
+    bookingId: v.id("bookings"),
+    cleanerId: v.id("cleaners"),
+    customerId: v.id("customers"),
+    to: v.string(),
+    cleanerFirstName: v.string(),
+    bookingReference: v.string(),
+    serviceName: v.string(),
+    customerName: v.string(),
+    customerPhone: v.string(),
+    scheduledDate: v.string(),
+    scheduledTime: v.string(),
+    address: v.string(),
+    jobUrl: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const template = cleanerJobAssignedEmail(args);
+    await sendTransactionalEmail(ctx, {
+      type: "CLEANER_JOB_ASSIGNED",
+      to: args.to,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+      customerId: args.customerId,
+      cleanerId: args.cleanerId,
+      bookingId: args.bookingId,
+    });
+    return null;
+  },
+});
 
 export const sendBookingConfirmation = internalAction({
   args: {

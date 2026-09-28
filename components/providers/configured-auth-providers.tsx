@@ -6,7 +6,7 @@ export function ConfiguredAuthProviders({ children }: { children: ReactNode }) {
   return (
     <ClerkProvider
       signInUrl="/sign-in"
-      signInFallbackRedirectUrl="/admin"
+      signInFallbackRedirectUrl="/auth/continue"
       signUpUrl="/accept-invitation"
       signUpFallbackRedirectUrl="/admin-invitation-complete"
       afterSignOutUrl="/sign-in"

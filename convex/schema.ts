@@ -11,6 +11,7 @@ export default defineSchema({
       v.literal("SUPER_ADMIN"),
       v.literal("ADMIN"),
       v.literal("CLEANER"),
+      v.literal("AGENCY_USER"),
     ),
     status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
     createdAt: v.number(),
@@ -18,6 +19,79 @@ export default defineSchema({
   })
     .index("by_clerk_user_id", ["clerkUserId"])
     .index("by_email", ["email"]),
+  gmailConnections: defineTable({
+    email: v.string(),
+    refreshToken: v.optional(v.string()),
+    scope: v.string(),
+    status: v.union(v.literal("ACTIVE"), v.literal("DISCONNECTED")),
+    gmailHistoryId: v.optional(v.string()),
+    watchExpiration: v.optional(v.number()),
+    watchUpdatedAt: v.optional(v.number()),
+    watchStatus: v.optional(v.union(v.literal("ACTIVE"), v.literal("ERROR"))),
+    watchError: v.optional(v.string()),
+    connectedByUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_email", ["email"]),
+  emailThreads: defineTable({
+    customerId: v.id("customers"),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    activeContext: v.union(v.literal("QUOTE"), v.literal("BOOKING")),
+    gmailThreadId: v.optional(v.string()),
+    subject: v.string(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("WAITING_CUSTOMER"),
+      v.literal("WAITING_STAFF"),
+      v.literal("CLOSED"),
+    ),
+    unreadCount: v.optional(v.number()),
+    lastMessageAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_quote", ["quoteId"])
+    .index("by_booking", ["bookingId"])
+    .index("by_customer", ["customerId"])
+    .index("by_gmail_thread", ["gmailThreadId"]),
+  emailMessages: defineTable({
+    threadId: v.id("emailThreads"),
+    gmailMessageId: v.optional(v.string()),
+    rfcMessageId: v.optional(v.string()),
+    direction: v.union(v.literal("INBOUND"), v.literal("OUTBOUND")),
+    from: v.string(),
+    to: v.string(),
+    subject: v.string(),
+    bodyText: v.string(),
+    bodyHtml: v.optional(v.string()),
+    readAt: v.optional(v.number()),
+    sentByUserId: v.optional(v.id("users")),
+    sentAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_thread", ["threadId"])
+    .index("by_gmail_message", ["gmailMessageId"])
+    .index("by_rfc_message", ["rfcMessageId"]),
+  unmatchedEmailMessages: defineTable({
+    gmailMessageId: v.string(),
+    gmailThreadId: v.string(),
+    rfcMessageId: v.optional(v.string()),
+    inReplyTo: v.optional(v.string()),
+    references: v.array(v.string()),
+    from: v.string(),
+    to: v.string(),
+    subject: v.string(),
+    bodyText: v.string(),
+    bodyHtml: v.optional(v.string()),
+    sentAt: v.number(),
+    receivedAt: v.number(),
+  })
+    .index("by_gmail_message", ["gmailMessageId"])
+    .index("by_gmail_thread", ["gmailThreadId"])
+    .index("by_received_at", ["receivedAt"]),
   adminInvitations: defineTable({
     email: v.string(),
     clerkInvitationId: v.string(),
@@ -30,6 +104,34 @@ export default defineSchema({
   })
     .index("by_email", ["email"])
     .index("by_status", ["status"]),
+  agencies: defineTable({
+    name: v.string(),
+    branchName: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    address: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
+    createdByUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_name", ["name"]),
+  agencyAccounts: defineTable({
+    agencyId: v.id("agencies"),
+    userId: v.id("users"),
+    username: v.string(),
+    teamName: v.string(),
+    status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
+    mustChangePassword: v.boolean(),
+    lastPasswordResetAt: v.optional(v.number()),
+    createdByUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_agency", ["agencyId"])
+    .index("by_user", ["userId"])
+    .index("by_username", ["username"]),
   customers: defineTable({
     firstName: v.string(),
     lastName: v.optional(v.string()),
@@ -44,6 +146,7 @@ export default defineSchema({
         v.literal("EMAIL"),
         v.literal("ADMIN"),
         v.literal("REFERRAL"),
+        v.literal("AGENCY"),
         v.literal("OTHER"),
       ),
     ),
@@ -53,6 +156,27 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_phone", ["phone"])
     .index("by_created_at", ["createdAt"]),
+  serviceAreaSettings: defineTable({
+    key: v.literal("DEFAULT"),
+    centreName: v.string(),
+    radiusKm: v.number(),
+    mode: v.union(v.literal("WARNING"), v.literal("ENFORCED")),
+    updatedByUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+  serviceAreaPostcodeOverrides: defineTable({
+    postcode: v.string(),
+    status: v.union(
+      v.literal("IN_AREA"),
+      v.literal("CHECK_ADDRESS"),
+      v.literal("OUTSIDE_AREA"),
+    ),
+    note: v.optional(v.string()),
+    updatedByUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_postcode", ["postcode"]),
   cleaners: defineTable({
     firstName: v.string(),
     lastName: v.string(),
@@ -113,7 +237,11 @@ export default defineSchema({
     submissionKey: v.optional(v.string()),
     customerId: v.id("customers"),
     serviceId: v.optional(v.id("services")),
-    source: v.optional(v.union(v.literal("WEBSITE"), v.literal("ADMIN"))),
+    agencyId: v.optional(v.id("agencies")),
+    agencyAccountId: v.optional(v.id("agencyAccounts")),
+    source: v.optional(
+      v.union(v.literal("WEBSITE"), v.literal("ADMIN"), v.literal("AGENCY")),
+    ),
     pricingSource: v.optional(
       v.union(v.literal("SERVICE"), v.literal("CUSTOM")),
     ),
@@ -124,6 +252,14 @@ export default defineSchema({
     suburb: v.string(),
     state: v.string(),
     postcode: v.string(),
+    serviceAreaStatus: v.optional(
+      v.union(
+        v.literal("IN_AREA"),
+        v.literal("CHECK_ADDRESS"),
+        v.literal("OUTSIDE_AREA"),
+      ),
+    ),
+    serviceAreaCheckedAt: v.optional(v.number()),
     preferredDate: v.optional(v.string()),
     preferredTime: v.optional(v.string()),
     propertyType: v.optional(v.string()),
@@ -177,6 +313,7 @@ export default defineSchema({
     .index("by_submission_key", ["submissionKey"])
     .index("by_status", ["status"])
     .index("by_customer", ["customerId"])
+    .index("by_agency", ["agencyId"])
     .index("by_created_at", ["createdAt"]),
   quotePayments: defineTable({
     quoteRequestId: v.id("quoteRequests"),
@@ -208,12 +345,15 @@ export default defineSchema({
     customerId: v.id("customers"),
     serviceId: v.id("services"),
     quoteRequestId: v.optional(v.id("quoteRequests")),
+    agencyId: v.optional(v.id("agencies")),
+    agencyAccountId: v.optional(v.id("agencyAccounts")),
     assignedCleanerIds: v.optional(v.array(v.string())),
     source: v.union(
       v.literal("WEBSITE"),
       v.literal("PHONE"),
       v.literal("ADMIN"),
       v.literal("REFERRAL"),
+      v.literal("AGENCY"),
       v.literal("OTHER"),
     ),
     status: v.union(
@@ -264,6 +404,14 @@ export default defineSchema({
     suburb: v.string(),
     state: v.string(),
     postcode: v.string(),
+    serviceAreaStatus: v.optional(
+      v.union(
+        v.literal("IN_AREA"),
+        v.literal("CHECK_ADDRESS"),
+        v.literal("OUTSIDE_AREA"),
+      ),
+    ),
+    serviceAreaCheckedAt: v.optional(v.number()),
     scheduledDate: v.string(),
     scheduledTime: v.string(),
     notes: v.optional(v.string()),
@@ -273,6 +421,7 @@ export default defineSchema({
     .index("by_reference", ["reference"])
     .index("by_submission_key", ["submissionKey"])
     .index("by_customer", ["customerId"])
+    .index("by_agency", ["agencyId"])
     .index("by_status", ["status"])
     .index("by_status_and_scheduled_date", ["status", "scheduledDate"])
     .index("by_stripe_checkout_session_id", ["stripeCheckoutSessionId"])

@@ -5,6 +5,7 @@ import { requireRole } from "./lib/auth";
 import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
 import { ensurePublicSlotAvailable } from "./availability";
+import { assessPostcode } from "./serviceAreas";
 
 const answerValue = v.union(
   v.number(),
@@ -207,6 +208,14 @@ export const createWebsiteBooking = mutation({
     }
     if (!/^\d{4}$/.test(postcode))
       throw new Error("Postcode must contain four digits.");
+    const serviceArea = await assessPostcode(ctx, postcode);
+    if (!serviceArea.canInstantBook) {
+      throw new Error(
+        serviceArea.status === "CHECK_ADDRESS"
+          ? "We need to confirm this address before booking. Please request a call."
+          : "This postcode is outside our standard service area. Please request a call.",
+      );
+    }
     validateSchedule(args.scheduledDate, args.scheduledTime);
     await ensurePublicSlotAvailable(ctx, args.scheduledDate, args.scheduledTime);
 
@@ -297,6 +306,8 @@ export const createWebsiteBooking = mutation({
       suburb,
       state,
       postcode,
+      serviceAreaStatus: serviceArea.status,
+      serviceAreaCheckedAt: now,
       scheduledDate: args.scheduledDate,
       scheduledTime: args.scheduledTime,
       notes,
@@ -318,6 +329,8 @@ export const createWebsiteBooking = mutation({
       suburb,
       state,
       postcode,
+      serviceAreaStatus: serviceArea.status,
+      serviceAreaCheckedAt: now,
       preferredDate: args.scheduledDate,
       preferredTime: args.scheduledTime,
       propertyType:

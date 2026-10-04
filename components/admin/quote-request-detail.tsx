@@ -41,6 +41,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmailConversation } from "@/components/admin/email-conversation";
 import { QuoteStatusBadge, type QuoteStatus } from "./quote-status-badge";
 
 const statuses: QuoteStatus[] = [
@@ -322,6 +323,23 @@ export function QuoteRequestDetail({
                 {quote.requestType === "CALLBACK_REQUEST"
                   ? "Callback requested"
                   : "Custom quote"}
+              </span>
+            ) : null}
+            {quote.serviceAreaStatus ? (
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  quote.serviceAreaStatus === "IN_AREA"
+                    ? "bg-emerald-50 text-emerald-800"
+                    : quote.serviceAreaStatus === "CHECK_ADDRESS"
+                      ? "bg-amber-50 text-amber-800"
+                      : "bg-red-50 text-red-700"
+                }`}
+              >
+                {quote.serviceAreaStatus === "IN_AREA"
+                  ? "Service area confirmed"
+                  : quote.serviceAreaStatus === "CHECK_ADDRESS"
+                    ? "Address check needed"
+                    : "Outside service area"}
               </span>
             ) : null}
           </div>
@@ -678,6 +696,8 @@ export function QuoteRequestDetail({
             </CardContent>
           </Card>
         ) : null}
+
+        <EmailConversation quoteId={quoteRequestId} className="lg:col-span-3" />
 
         <Card className="gap-5 border-slate-200 shadow-sm">
           <CardHeader>

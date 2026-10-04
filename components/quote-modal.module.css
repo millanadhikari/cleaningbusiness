@@ -506,6 +506,41 @@
   gap: 14px 10px;
   align-items: end;
 }
+.serviceAreaMessage {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -2px;
+  border: 1px solid;
+  border-radius: 11px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.serviceAreaMessage button {
+  flex: 0 0 auto;
+  color: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.serviceAreaSuccess {
+  border-color: #b8dfd0;
+  background: #edf9f4;
+  color: #096b56;
+}
+.serviceAreaWarning {
+  border-color: #ead18b;
+  background: #fff9e9;
+  color: #805d05;
+}
+.serviceAreaOutside {
+  border-color: #efb8b8;
+  background: #fff2f2;
+  color: #a12f2f;
+}
 .full {
   grid-column: 1/-1;
 }

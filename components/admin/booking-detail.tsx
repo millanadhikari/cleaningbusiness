@@ -53,6 +53,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { EmailConversation } from "@/components/admin/email-conversation";
 import styles from "./booking-detail.module.css";
 
 const cardClass =
@@ -451,6 +452,24 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
               <Badge variant="secondary">
                 {label(booking.paymentStatus)}
               </Badge>
+              {booking.serviceAreaStatus ? (
+                <Badge
+                  variant="secondary"
+                  className={
+                    booking.serviceAreaStatus === "IN_AREA"
+                      ? "bg-emerald-50 text-emerald-800"
+                      : booking.serviceAreaStatus === "CHECK_ADDRESS"
+                        ? "bg-amber-50 text-amber-800"
+                        : "bg-red-50 text-red-700"
+                  }
+                >
+                  {booking.serviceAreaStatus === "IN_AREA"
+                    ? "Service area confirmed"
+                    : booking.serviceAreaStatus === "CHECK_ADDRESS"
+                      ? "Address check needed"
+                      : "Outside service area"}
+                </Badge>
+              ) : null}
             </div>
             <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Booking details
@@ -571,6 +590,8 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
           </form>
         </CardContent>
       </Card>
+
+      <EmailConversation bookingId={bookingId} />
 
       <div className={styles.columns}>
         <div className="space-y-5">

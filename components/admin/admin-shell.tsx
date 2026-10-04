@@ -1,6 +1,7 @@
 'use client';
 
 import { UserButton } from '@clerk/nextjs';
+import { useConvexAuth, useQuery } from 'convex/react';
 import {
   CalendarCheck,
   CalendarDays,
@@ -13,6 +14,7 @@ import {
   Gauge,
   LayoutDashboard,
   Menu,
+  MailQuestion,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -21,6 +23,7 @@ import {
   ShieldCheck,
   UserRoundCheck,
   UsersRound,
+  Building2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -38,6 +41,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
+import { api } from '@/convex/_generated/api';
 
 type AdminRole = 'SUPER_ADMIN' | 'ADMIN';
 
@@ -67,9 +71,11 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
     items: [
       { href: '/admin/quotes', label: 'Quotes', icon: ClipboardList },
       { href: '/admin/bookings', label: 'Bookings', icon: CalendarCheck },
+      { href: '/admin/email/unmatched', label: 'Unmatched Email', icon: MailQuestion },
       { href: '/admin/calendar', label: 'Calendar', icon: CalendarDays },
       { href: '/admin/cleaners', label: 'Team', icon: UserRoundCheck },
       { href: '/admin/customers', label: 'Customers', icon: UsersRound },
+      { href: '/admin/agencies', label: 'Real Estate', icon: Building2 },
       { href: '/admin/services', label: 'Services', icon: ConciergeBell },
       { href: '/admin/blog', label: 'Blog', icon: FileText },
     ],
@@ -98,6 +104,7 @@ const pageTitles: Record<string, string> = {
   '/admin': 'Dashboard',
   '/admin/quotes': 'Quotes',
   '/admin/customers': 'Customers',
+  '/admin/agencies': 'Real Estate Agencies',
   '/admin/services': 'Services',
   '/admin/blog': 'Blog',
   '/admin/bookings': 'Bookings',
@@ -106,6 +113,7 @@ const pageTitles: Record<string, string> = {
   '/admin/users': 'Admin Users',
   '/admin/usage': 'Platform Usage',
   '/admin/settings': 'Settings',
+  '/admin/email/unmatched': 'Unmatched Email',
 };
 
 function isActiveRoute(pathname: string, href: string) {
@@ -125,6 +133,9 @@ function getPageTitle(pathname: string) {
   if (pathname.startsWith('/admin/customers/')) {
     return 'Customer Details';
   }
+  if (pathname.startsWith('/admin/agencies/')) {
+    return 'Agency Details';
+  }
   if (pathname.startsWith('/admin/services/')) {
     return 'Service Configuration';
   }
@@ -136,11 +147,13 @@ function SidebarNavigation({
   role,
   mobile = false,
   collapsed = false,
+  unmatchedCount = 0,
 }: {
   pathname: string;
   role: AdminRole;
   mobile?: boolean;
   collapsed?: boolean;
+  unmatchedCount?: number;
 }) {
   const [query, setQuery] = useState('');
   const normalizedQuery = query.trim().toLowerCase();
@@ -215,7 +228,16 @@ function SidebarNavigation({
                           : 'text-[#70847f] group-hover:text-[#007c70]',
                       )}
                     />
-                    {!collapsed ? <span className="truncate">{label}</span> : null}
+                    {!collapsed ? <span className="min-w-0 flex-1 truncate">{label}</span> : null}
+                    {href === '/admin/email/unmatched' && unmatchedCount > 0 ? (
+                      <span className={cn(
+                        'grid min-w-5 place-items-center rounded-full px-1.5 text-[10px] font-bold',
+                        active ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800',
+                        collapsed && 'absolute -right-1 -top-1',
+                      )}>
+                        {unmatchedCount > 99 ? '99+' : unmatchedCount}
+                      </span>
+                    ) : null}
                   </Link>
                 );
 
@@ -275,6 +297,8 @@ function ProfileCard({
 
 export function AdminShell({ children, user }: AdminShellProps) {
   const pathname = usePathname();
+  const { isAuthenticated } = useConvexAuth();
+  const unmatchedCount = useQuery(api.gmail.getUnmatchedCount, isAuthenticated ? {} : 'skip') ?? 0;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const pageTitle = getPageTitle(pathname);
 
@@ -322,6 +346,7 @@ export function AdminShell({ children, user }: AdminShellProps) {
           pathname={pathname}
           role={user.role}
           collapsed={sidebarCollapsed}
+          unmatchedCount={unmatchedCount}
         />
 
         <div className={cn('border-t border-[#edf2ef]', sidebarCollapsed ? 'p-3' : 'p-4')}>
@@ -357,7 +382,7 @@ export function AdminShell({ children, user }: AdminShellProps) {
                     </SheetDescription>
                     <Brand />
                   </SheetHeader>
-                  <SidebarNavigation pathname={pathname} role={user.role} mobile />
+                  <SidebarNavigation pathname={pathname} role={user.role} mobile unmatchedCount={unmatchedCount} />
                   <div className="border-t border-[#edf2ef] p-4">
                     <ProfileCard user={user} />
                   </div>

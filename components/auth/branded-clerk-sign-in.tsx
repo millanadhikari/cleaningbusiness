@@ -7,7 +7,7 @@ export function BrandedClerkSignIn() {
     <SignIn
       path="/sign-in"
       routing="path"
-      fallbackRedirectUrl="/admin"
+      fallbackRedirectUrl="/auth/continue"
       withSignUp={false}
       transferable={false}
       appearance={{

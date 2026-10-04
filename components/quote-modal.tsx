@@ -262,6 +262,10 @@ export function QuoteModal({
     api.availability.listPublic,
     open ? availabilityRange : "skip",
   );
+  const postcodeCheck = useQuery(
+    api.serviceAreas.checkPostcode,
+    /^\d{4}$/.test(postcode) ? { postcode } : "skip",
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -331,6 +335,7 @@ export function QuoteModal({
     address.trim() &&
     suburb.trim() &&
     /^\d{4}$/.test(postcode) &&
+    (intent !== "BOOKING" || postcodeCheck?.canInstantBook === true) &&
     date &&
     scheduledTime &&
     agreed,
@@ -765,6 +770,13 @@ export function QuoteModal({
                   setState={setState}
                   postcode={postcode}
                   setPostcode={setPostcode}
+                  serviceArea={postcodeCheck}
+                  serviceAreaChecking={/^\d{4}$/.test(postcode) && postcodeCheck === undefined}
+                  onRequestCall={() => {
+                    setIntent("CALLBACK_REQUEST");
+                    setPaymentOption(null);
+                    setError(null);
+                  }}
                   scheduledTime={scheduledTime}
                   setScheduledTime={setScheduledTime}
                   date={date}
@@ -1393,6 +1405,14 @@ function DetailsStep(props: {
   setState: (v: string) => void;
   postcode: string;
   setPostcode: (v: string) => void;
+  serviceArea?: {
+    status: "IN_AREA" | "CHECK_ADDRESS" | "OUTSIDE_AREA";
+    mode: "WARNING" | "ENFORCED";
+    canInstantBook: boolean;
+    radiusKm: number;
+  };
+  serviceAreaChecking: boolean;
+  onRequestCall: () => void;
   scheduledTime: string;
   setScheduledTime: (v: string) => void;
   date: string;
@@ -1502,6 +1522,38 @@ function DetailsStep(props: {
             placeholder="e.g. 2150"
           />
         </label>
+        {/^\d{4}$/.test(props.postcode) ? (
+          <div
+            className={`${styles.serviceAreaMessage} ${
+              props.serviceArea?.status === "IN_AREA"
+                ? styles.serviceAreaSuccess
+                : props.serviceArea?.canInstantBook
+                  ? styles.serviceAreaWarning
+                  : styles.serviceAreaOutside
+            }`}
+          >
+            {props.serviceAreaChecking ? (
+              <span>Checking whether we service this postcode…</span>
+            ) : props.serviceArea?.status === "IN_AREA" ? (
+              <span>Great news—we service this postcode.</span>
+            ) : props.serviceArea?.canInstantBook ? (
+              <span>
+                This postcode is outside or near the edge of our standard {props.serviceArea.radiusKm} km area. Your request will be flagged for review.
+              </span>
+            ) : (
+              <>
+                <span>
+                  {props.serviceArea?.status === "CHECK_ADDRESS"
+                    ? "We need to confirm the complete address before booking."
+                    : "This postcode is outside our standard service area."}
+                </span>
+                {props.intent === "BOOKING" ? (
+                  <button type="button" onClick={props.onRequestCall}>Request a call instead</button>
+                ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
         <label className={styles.field}>
           <span>Requested time *</span>
           <div className={styles.selectWrap}>

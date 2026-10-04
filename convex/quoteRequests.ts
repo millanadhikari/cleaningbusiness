@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireRole } from "./lib/auth";
 import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
+import { assessPostcode } from "./serviceAreas";
 
 const quoteStatus = v.union(
   v.literal("NEW"),
@@ -27,7 +28,7 @@ const answerValue = v.union(
   v.array(v.string()),
 );
 
-type AnswerValue = number | boolean | string | string[];
+export type AnswerValue = number | boolean | string | string[];
 
 const adminQuoteFields = {
   firstName: v.string(),
@@ -51,7 +52,7 @@ const adminQuoteFields = {
   notes: v.optional(v.string()),
 };
 
-type AdminQuoteInput = {
+export type AdminQuoteInput = {
   firstName: string;
   lastName?: string;
   email?: string;
@@ -165,7 +166,7 @@ function validateDate(value: string | undefined) {
   return normalized;
 }
 
-async function prepareAdminQuote(ctx: MutationCtx, args: AdminQuoteInput) {
+export async function prepareAdminQuote(ctx: MutationCtx, args: AdminQuoteInput) {
   const firstName = requiredText(args.firstName, "First name", 80);
   const lastName = optionalText(args.lastName, "Last name", 80);
   const email = args.email ? normalizeEmail(args.email) : undefined;
@@ -387,6 +388,7 @@ export const submit = mutation({
     if (!/^\d{4}$/.test(postcode)) {
       throw new Error("Postcode must contain four digits.");
     }
+    const serviceArea = await assessPostcode(ctx, postcode);
     if (preferredDate) {
       const parsedDate = new Date(`${preferredDate}T12:00:00.000Z`);
       if (
@@ -495,6 +497,8 @@ export const submit = mutation({
       suburb,
       state,
       postcode,
+      serviceAreaStatus: serviceArea.status,
+      serviceAreaCheckedAt: now,
       preferredDate,
       preferredTime,
       propertyType,
@@ -727,7 +731,9 @@ export async function convertAcceptedQuoteRecord(
       customerId: quote.customerId,
       serviceId: quote.serviceId,
       quoteRequestId: quote._id,
-      source: "ADMIN",
+      agencyId: quote.agencyId,
+      agencyAccountId: quote.agencyAccountId,
+      source: quote.source === "AGENCY" ? "AGENCY" : "ADMIN",
       status: "CONFIRMED",
       paymentStatus,
       paymentOption: args.paymentOption,
@@ -760,6 +766,17 @@ export async function convertAcceptedQuoteRecord(
       convertedBookingId: bookingId,
       updatedAt: now,
     });
+    const emailThread = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_quote", (index) => index.eq("quoteId", quote._id))
+      .unique();
+    if (emailThread) {
+      await ctx.db.patch(emailThread._id, {
+        bookingId,
+        activeContext: "BOOKING",
+        updatedAt: now,
+      });
+    }
     if (paidAmount > 0 && args.paymentMethod && args.paymentRequestKey) {
       await ctx.db.insert("bookingPayments", {
         bookingId,

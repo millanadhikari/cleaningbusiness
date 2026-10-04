@@ -8,5 +8,11 @@ export default async function ContinuePage() {
   await auth.protect();
   const token = await getConvexAuthToken();
   const user = await fetchQuery(api.users.current, {}, { token: token ?? undefined });
-  redirect(user.role === 'CLEANER' ? '/cleaner' : '/admin');
+  redirect(
+    user.role === 'CLEANER'
+      ? '/cleaner'
+      : user.role === 'AGENCY_USER'
+        ? '/agency'
+        : '/admin',
+  );
 }

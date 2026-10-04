@@ -6,6 +6,7 @@ const userRole = v.union(
   v.literal('SUPER_ADMIN'),
   v.literal('ADMIN'),
   v.literal('CLEANER'),
+  v.literal('AGENCY_USER'),
 );
 const adminRole = v.union(v.literal('SUPER_ADMIN'), v.literal('ADMIN'));
 const userStatus = v.union(v.literal('ACTIVE'), v.literal('INACTIVE'));
@@ -22,7 +23,7 @@ export const current = query({
     const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
 
     return {
-      name: fullName || user.email || 'Admin',
+      name: fullName || user.email || 'Portal user',
       email: user.email,
       role: user.role,
     };

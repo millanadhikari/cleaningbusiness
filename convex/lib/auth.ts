@@ -57,3 +57,25 @@ export async function requireCleaner(ctx: AuthContext) {
   }
   return { user, cleaner };
 }
+
+export async function requireAgencyAccount(
+  ctx: AuthContext,
+  options: { allowPasswordChangePending?: boolean } = {},
+) {
+  const user = await requireRole(ctx, ['AGENCY_USER']);
+  const account = await ctx.db
+    .query('agencyAccounts')
+    .withIndex('by_user', (query) => query.eq('userId', user._id))
+    .unique();
+  if (!account || account.status !== 'ACTIVE') {
+    throw new Error('Agency portal account is unavailable or inactive.');
+  }
+  const agency = await ctx.db.get(account.agencyId);
+  if (!agency || agency.status !== 'ACTIVE') {
+    throw new Error('Agency access is inactive. Contact WeDo Cleaning.');
+  }
+  if (account.mustChangePassword && !options.allowPasswordChangePending) {
+    throw new Error('Change your temporary password before continuing.');
+  }
+  return { user, account, agency };
+}

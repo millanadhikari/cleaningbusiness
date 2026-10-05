@@ -3,6 +3,7 @@ const APP_PRODUCTION_HOST = 'app.wedocleaning.com.au';
 
 const APP_ROUTE_PREFIXES = [
   '/admin',
+  '/api/admin',
   '/api/google',
   '/auth/continue',
   '/sign-in',

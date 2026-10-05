@@ -35,6 +35,7 @@ Configure these on the `agreeable-possum-344` production deployment:
 ## Runtime behavior
 
 - Gmail watches only the `INBOX` label and the cron renews the watch every day at 15:00 UTC.
+- A one-minute polling fallback advances Gmail history when Pub/Sub delivery is delayed or unavailable.
 - Push JWTs are checked for Google signature, issuer, audience, verified email, and the configured service-account email.
 - Valid pushes are acknowledged before Gmail history processing runs asynchronously.
 - Expired history cursors trigger a full inbox recovery before the history cursor advances.

@@ -6,6 +6,7 @@ import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
 import { ensurePublicSlotAvailable } from "./availability";
 import { assessPostcode } from "./serviceAreas";
+import { linkWebsiteBooking, linkWebsiteQuote } from "./lib/websiteAnalytics";
 
 const answerValue = v.union(
   v.number(),
@@ -112,6 +113,7 @@ function validateSchedule(date: string, time: string) {
 export const createWebsiteBooking = mutation({
   args: {
     submissionKey: v.string(),
+    sessionId: v.optional(v.string()),
     firstName: v.string(),
     lastName: v.optional(v.string()),
     email: v.optional(v.string()),
@@ -152,6 +154,12 @@ export const createWebsiteBooking = mutation({
           await ctx.db.patch(existingSubmission.quoteRequestId, { reference });
         }
       }
+      await linkWebsiteBooking(ctx, {
+        sessionId: args.sessionId,
+        quoteId: existingSubmission.quoteRequestId,
+        bookingId: existingSubmission._id,
+        customerId: existingSubmission.customerId,
+      });
       return { bookingId: existingSubmission._id, reference };
     }
 
@@ -356,6 +364,13 @@ export const createWebsiteBooking = mutation({
       updatedAt: now,
     });
     await ctx.db.patch(bookingId, { quoteRequestId });
+    await linkWebsiteQuote(ctx, args.sessionId, quoteRequestId, customerId);
+    await linkWebsiteBooking(ctx, {
+      sessionId: args.sessionId,
+      quoteId: quoteRequestId,
+      bookingId,
+      customerId,
+    });
 
     const confirmationEmail = email ?? existing?.email;
     if (isPayLater && confirmationEmail) {

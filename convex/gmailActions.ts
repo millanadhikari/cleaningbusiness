@@ -525,3 +525,29 @@ export const processHistoryNotification = internalAction({
     }
   },
 });
+
+export const pollInbox = internalAction({
+  args: {},
+  handler: async (ctx): Promise<unknown> => {
+    const connection: ConnectionCredentials | null = await ctx.runQuery(
+      internal.gmail.getActiveConnection,
+      {},
+    );
+    if (!connection) return { processed: false, reason: "not_connected" as const };
+
+    const oauth = oauthClient();
+    oauth.setCredentials({ refresh_token: connection.refreshToken });
+    const profile = await google.gmail({ version: "v1", auth: oauth }).users.getProfile({
+      userId: "me",
+    });
+    const historyId = profile.data.historyId;
+    if (!historyId || historyId === connection.gmailHistoryId) {
+      return { processed: false, reason: "up_to_date" as const };
+    }
+
+    return await ctx.runAction(internal.gmailActions.processHistoryNotification, {
+      emailAddress: connection.email,
+      historyId,
+    });
+  },
+});

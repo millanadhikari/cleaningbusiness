@@ -73,11 +73,18 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const authorization = request.headers.get("authorization");
     const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-    if (!bearer) return new Response("Missing bearer token.", { status: 401 });
+    if (!bearer) {
+      console.error("Rejected Gmail Pub/Sub push: missing bearer token");
+      return new Response("Missing bearer token.", { status: 401 });
+    }
 
     try {
       await ctx.runAction(internal.gmailActions.verifyPubSubToken, { token: bearer });
-    } catch {
+    } catch (error) {
+      console.error(
+        "Rejected Gmail Pub/Sub push: token verification failed",
+        error instanceof Error ? error.message.slice(0, 300) : "Unknown verification error",
+      );
       return new Response("Invalid bearer token.", { status: 401 });
     }
 

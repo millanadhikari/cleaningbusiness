@@ -3,12 +3,13 @@
 import { useMutation } from 'convex/react';
 import { CheckCircle2, LoaderCircle, Send } from 'lucide-react';
 import Link from 'next/link';
-import { type FormEvent, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { getWebsiteSessionId } from '@/lib/website-analytics';
 
 const serviceTypes = [
   'House Cleaning',
@@ -39,11 +40,21 @@ const selectClassName =
 
 export function QuoteRequestForm() {
   const submitQuote = useMutation(api.quoteRequests.submit);
+  const trackEvent = useMutation(api.websiteAnalytics.trackEvent);
   const submissionKey = useRef<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [reference, setReference] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const sessionId = getWebsiteSessionId();
+    if (sessionId) {
+      void trackEvent({ sessionId, page: window.location.pathname, eventType: 'QUOTE_STARTED' }).catch(
+        () => undefined,
+      );
+    }
+  }, [trackEvent]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -70,6 +81,7 @@ export function QuoteRequestForm() {
       submissionKey.current ??= crypto.randomUUID();
       const result = await submitQuote({
         submissionKey: submissionKey.current,
+        sessionId: getWebsiteSessionId(),
         firstName: String(formData.get('firstName') ?? ''),
         lastName: optionalString(formData, 'lastName'),
         email: String(formData.get('email') ?? ''),

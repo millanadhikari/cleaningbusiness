@@ -11,6 +11,7 @@
 import type * as adminInvitations from "../adminInvitations.js";
 import type * as agencies from "../agencies.js";
 import type * as agencyPortal from "../agencyPortal.js";
+import type * as analytics from "../analytics.js";
 import type * as availability from "../availability.js";
 import type * as blogs from "../blogs.js";
 import type * as bookings from "../bookings.js";
@@ -33,6 +34,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_invoicePdf from "../lib/invoicePdf.js";
 import type * as lib_sendTransactionalEmail from "../lib/sendTransactionalEmail.js";
 import type * as lib_sydneyServiceArea from "../lib/sydneyServiceArea.js";
+import type * as lib_websiteAnalytics from "../lib/websiteAnalytics.js";
 import type * as lib_workReferences from "../lib/workReferences.js";
 import type * as platformUsage from "../platformUsage.js";
 import type * as quoteRequests from "../quoteRequests.js";
@@ -42,6 +44,7 @@ import type * as services from "../services.js";
 import type * as stripeData from "../stripeData.js";
 import type * as stripePayments from "../stripePayments.js";
 import type * as users from "../users.js";
+import type * as websiteAnalytics from "../websiteAnalytics.js";
 
 import type {
   ApiFromModules,
@@ -53,6 +56,7 @@ declare const fullApi: ApiFromModules<{
   adminInvitations: typeof adminInvitations;
   agencies: typeof agencies;
   agencyPortal: typeof agencyPortal;
+  analytics: typeof analytics;
   availability: typeof availability;
   blogs: typeof blogs;
   bookings: typeof bookings;
@@ -75,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   "lib/invoicePdf": typeof lib_invoicePdf;
   "lib/sendTransactionalEmail": typeof lib_sendTransactionalEmail;
   "lib/sydneyServiceArea": typeof lib_sydneyServiceArea;
+  "lib/websiteAnalytics": typeof lib_websiteAnalytics;
   "lib/workReferences": typeof lib_workReferences;
   platformUsage: typeof platformUsage;
   quoteRequests: typeof quoteRequests;
@@ -84,6 +89,7 @@ declare const fullApi: ApiFromModules<{
   stripeData: typeof stripeData;
   stripePayments: typeof stripePayments;
   users: typeof users;
+  websiteAnalytics: typeof websiteAnalytics;
 }>;
 
 /**

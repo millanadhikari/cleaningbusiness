@@ -33,6 +33,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import { getWebsiteSessionId } from "@/lib/website-analytics";
 import type { Id } from "@/convex/_generated/dataModel";
 import styles from "./quote-modal.module.css";
 
@@ -168,6 +169,7 @@ export function QuoteModal({
   const convex = useConvex();
   const submitQuote = useMutation(api.quoteRequests.submit);
   const createBooking = useMutation(api.bookings.createWebsiteBooking);
+  const trackEvent = useMutation(api.websiteAnalytics.trackEvent);
   const createCheckoutSession = useAction(
     api.stripePayments.createBookingCheckoutSession,
   );
@@ -279,6 +281,18 @@ export function QuoteModal({
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [closeModal, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const sessionId = getWebsiteSessionId();
+    if (sessionId) {
+      void trackEvent({
+        sessionId,
+        page: window.location.pathname,
+        eventType: "QUOTE_STARTED",
+      }).catch(() => undefined);
+    }
+  }, [open, trackEvent]);
 
   useEffect(() => {
     if (!open) return;
@@ -420,6 +434,16 @@ export function QuoteModal({
       setScheduledTime(availableSlots[0].time);
     }
     setIntent(nextIntent);
+    if (nextIntent === "BOOKING") {
+      const sessionId = getWebsiteSessionId();
+      if (sessionId) {
+        void trackEvent({
+          sessionId,
+          page: window.location.pathname,
+          eventType: "BOOKING_STARTED",
+        }).catch(() => undefined);
+      }
+    }
     if (nextIntent === "BOOKING" && estimate.type === "ESTIMATE")
       setPaymentOption(
         estimate.paymentRequirement === "PAY_LATER"
@@ -481,6 +505,7 @@ export function QuoteModal({
       const result = await submitQuote({
         ...requestPayload(),
         submissionKey: quoteSubmissionKey.current,
+        sessionId: getWebsiteSessionId(),
         requestType: intent,
       });
       setWorkReference(result.reference);
@@ -511,6 +536,7 @@ export function QuoteModal({
         bookingSubmissionKey.current ??= crypto.randomUUID();
         const result = await createBooking({
           submissionKey: bookingSubmissionKey.current,
+          sessionId: getWebsiteSessionId(),
           firstName: payload.firstName,
           lastName: payload.lastName,
           email: payload.email,
@@ -533,6 +559,14 @@ export function QuoteModal({
       if (paymentOption === "PAY_LATER") {
         setComplete(true);
         return;
+      }
+      const analyticsSessionId = getWebsiteSessionId();
+      if (analyticsSessionId) {
+        void trackEvent({
+          sessionId: analyticsSessionId,
+          page: window.location.pathname,
+          eventType: "PAYMENT_STARTED",
+        }).catch(() => undefined);
       }
       const { checkoutUrl } = await createCheckoutSession({
         bookingId: createdId,

@@ -5,6 +5,7 @@ import { useConvexAuth, useQuery } from 'convex/react';
 import {
   CalendarCheck,
   CalendarDays,
+  ChartNoAxesCombined,
   ChevronRight,
   ClipboardList,
   ConciergeBell,
@@ -64,7 +65,15 @@ type NavigationItem = {
 const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
   {
     label: 'Overview',
-    items: [{ href: '/admin', label: 'Dashboard', icon: LayoutDashboard }],
+    items: [
+      { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+      {
+        href: '/admin/analytics',
+        label: 'Analytics',
+        icon: ChartNoAxesCombined,
+        superAdminOnly: true,
+      },
+    ],
   },
   {
     label: 'Workspace',
@@ -102,6 +111,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
 
 const pageTitles: Record<string, string> = {
   '/admin': 'Dashboard',
+  '/admin/analytics': 'Analytics',
   '/admin/quotes': 'Quotes',
   '/admin/customers': 'Customers',
   '/admin/agencies': 'Real Estate Agencies',

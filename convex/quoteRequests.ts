@@ -6,6 +6,7 @@ import { requireRole } from "./lib/auth";
 import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
 import { assessPostcode } from "./serviceAreas";
+import { linkWebsiteBooking, linkWebsiteQuote } from "./lib/websiteAnalytics";
 
 const quoteStatus = v.union(
   v.literal("NEW"),
@@ -310,6 +311,7 @@ export async function prepareAdminQuote(ctx: MutationCtx, args: AdminQuoteInput)
 export const submit = mutation({
   args: {
     submissionKey: v.string(),
+    sessionId: v.optional(v.string()),
     firstName: v.string(),
     lastName: v.optional(v.string()),
     email: v.optional(v.string()),
@@ -351,6 +353,12 @@ export const submit = mutation({
       if (!existingSubmission.reference) {
         await ctx.db.patch(existingSubmission._id, { reference });
       }
+      await linkWebsiteQuote(
+        ctx,
+        args.sessionId,
+        existingSubmission._id,
+        existingSubmission.customerId,
+      );
       return { quoteRequestId: existingSubmission._id, reference };
     }
 
@@ -536,6 +544,8 @@ export const submit = mutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    await linkWebsiteQuote(ctx, args.sessionId, quoteRequestId, customerId);
 
     if (email) {
       await ctx.scheduler.runAfter(
@@ -765,6 +775,11 @@ export async function convertAcceptedQuoteRecord(
       reference,
       convertedBookingId: bookingId,
       updatedAt: now,
+    });
+    await linkWebsiteBooking(ctx, {
+      quoteId: quote._id,
+      bookingId,
+      customerId: quote.customerId,
     });
     const emailThread = await ctx.db
       .query("emailThreads")

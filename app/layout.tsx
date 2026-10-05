@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { GoogleAnalytics } from '@/components/analytics/google-analytics';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -10,6 +11,7 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const ga4MeasurementId = process.env.NEXT_PUBLIC_GA4_MEASUREMENT_ID?.trim();
   const clerkConfigured = Boolean(
     process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
   );
@@ -32,7 +34,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang="en-AU">
-      <body className="antialiased">{content}</body>
+      <body className="antialiased">
+        {content}
+        {ga4MeasurementId && /^G-[A-Z0-9]+$/i.test(ga4MeasurementId) ? (
+          <GoogleAnalytics measurementId={ga4MeasurementId} />
+        ) : null}
+      </body>
     </html>
   );
 }

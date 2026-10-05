@@ -19,7 +19,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     const { ConfiguredAuthProviders } = await import(
       '@/components/providers/configured-auth-providers'
     );
-    content = <ConfiguredAuthProviders>{children}</ConfiguredAuthProviders>;
+    const { WebsiteAnalyticsTracker } = await import(
+      '@/components/analytics/website-analytics-tracker'
+    );
+    content = (
+      <ConfiguredAuthProviders>
+        <WebsiteAnalyticsTracker />
+        {children}
+      </ConfiguredAuthProviders>
+    );
   }
 
   return (

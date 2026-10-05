@@ -156,9 +156,9 @@ export function DashboardOverview() {
           <h2>A clearer view of your day.</h2>
           <p>Every enquiry, every customer, every upcoming clean.</p>
         </div>
-        <span className={styles.live}>
-          <span />
-          Live overview
+        <span className={styles.live} aria-label="Live overview, updates automatically">
+          <span className={styles.liveIndicator} aria-hidden="true" />
+          <span className={styles.liveText}>Live overview</span>
         </span>
       </div>
       <section className={styles.metrics} aria-label="Business metrics">

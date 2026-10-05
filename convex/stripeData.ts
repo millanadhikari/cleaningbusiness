@@ -7,6 +7,7 @@ import {
   calculateQuotePaymentAmount,
   convertAcceptedQuoteRecord,
 } from "./quoteRequests";
+import { recordWebsitePayment } from "./lib/websiteAnalytics";
 
 export const prepareCheckout = internalQuery({
   args: { bookingId: v.id("bookings") },
@@ -454,6 +455,7 @@ export const processCheckoutEvent = internalMutation({
           checkoutSessionId: args.checkoutSessionId,
           paymentRequestKey: `quote-payment:${quotePayment._id}`,
         });
+        await recordWebsitePayment(ctx, bookingId, quotePayment.amountCents);
       } else if (
         args.eventType === "checkout.session.async_payment_failed" ||
         args.eventType === "checkout.session.expired"
@@ -557,6 +559,7 @@ export const processCheckoutEvent = internalMutation({
         stripePaymentIntentId: args.paymentIntentId,
         updatedAt: Date.now(),
       });
+      await recordWebsitePayment(ctx, booking._id, payment?.amountCents);
       if (args.stripeCustomerId) {
         await ctx.db.patch(booking.customerId, {
           stripeCustomerId: args.stripeCustomerId,

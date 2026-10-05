@@ -156,6 +156,59 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_phone", ["phone"])
     .index("by_created_at", ["createdAt"]),
+  websiteSessions: defineTable({
+    sessionId: v.string(),
+    anonymousId: v.string(),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    landingPage: v.string(),
+    currentPage: v.string(),
+    referrer: v.optional(v.string()),
+    source: v.optional(v.string()),
+    medium: v.optional(v.string()),
+    campaign: v.optional(v.string()),
+    term: v.optional(v.string()),
+    content: v.optional(v.string()),
+    deviceType: v.optional(v.string()),
+    browser: v.optional(v.string()),
+    os: v.optional(v.string()),
+    country: v.optional(v.string()),
+    region: v.optional(v.string()),
+    customerId: v.optional(v.id("customers")),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_session_id", ["sessionId"])
+    .index("by_created_at", ["createdAt"])
+    .index("by_last_seen", ["lastSeenAt"])
+    .index("by_quote", ["quoteId"])
+    .index("by_booking", ["bookingId"]),
+  websiteEvents: defineTable({
+    sessionId: v.string(),
+    eventType: v.union(
+      v.literal("PAGE_VIEW"),
+      v.literal("QUOTE_STARTED"),
+      v.literal("QUOTE_SUBMITTED"),
+      v.literal("BOOKING_STARTED"),
+      v.literal("BOOKING_CREATED"),
+      v.literal("PAYMENT_STARTED"),
+      v.literal("PAYMENT_COMPLETED"),
+    ),
+    page: v.string(),
+    metadata: v.optional(
+      v.record(
+        v.string(),
+        v.union(v.string(), v.number(), v.boolean()),
+      ),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_event_type", ["eventType"])
+    .index("by_created_at", ["createdAt"])
+    .index("by_session_and_created_at", ["sessionId", "createdAt"]),
   serviceAreaSettings: defineTable({
     key: v.literal("DEFAULT"),
     centreName: v.string(),
@@ -575,7 +628,8 @@ export default defineSchema({
   })
     .index("by_booking_and_created_at", ["bookingId", "createdAt"])
     .index("by_checkout_session", ["checkoutSessionId"])
-    .index("by_request_key", ["requestKey"]),
+    .index("by_request_key", ["requestKey"])
+    .index("by_paid_at", ["paidAt"]),
   services: defineTable({
     name: v.string(),
     slug: v.string(),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from 'convex/react';
+import { useConvexAuth, useQuery } from 'convex/react';
 import {
   addDays,
   endOfDay,
@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api } from '@/convex/_generated/api';
+import { Ga4AnalyticsSection } from './ga4-analytics-section';
+import { SearchConsoleSection } from './search-console-section';
 import styles from './analytics-dashboard.module.css';
 
 type RangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'previous' | 'custom';
@@ -62,6 +64,7 @@ function EmptyState({ children }: { children: React.ReactNode }) {
 }
 
 export function AnalyticsDashboard() {
+  const { isAuthenticated } = useConvexAuth();
   const [rangeKey, setRangeKey] = useState<RangeKey>('30d');
   const [customFrom, setCustomFrom] = useState(format(subDays(new Date(), 29), 'yyyy-MM-dd'));
   const [customTo, setCustomTo] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -69,7 +72,7 @@ export function AnalyticsDashboard() {
     () => rangeFor(rangeKey, customFrom, customTo),
     [rangeKey, customFrom, customTo],
   );
-  const data = useQuery(api.analytics.overview, range);
+  const data = useQuery(api.analytics.overview, isAuthenticated ? range : 'skip');
 
   const rangeOptions: Array<{ key: RangeKey; label: string }> = [
     { key: 'today', label: 'Today' },
@@ -91,7 +94,7 @@ export function AnalyticsDashboard() {
 
   const kpis = [
     { label: 'Website visitors', value: data.kpis.visitors.toLocaleString(), icon: Eye },
-    { label: 'Live visitors', value: data.kpis.liveVisitors.toLocaleString(), icon: Radio, live: true },
+    { label: 'First-party Live Visitors', value: data.kpis.liveVisitors.toLocaleString(), icon: Radio, live: true },
     { label: 'Quotes submitted', value: data.kpis.quotes.toLocaleString(), icon: ReceiptText },
     { label: 'Bookings created', value: data.kpis.bookings.toLocaleString(), icon: CheckCircle2 },
     { label: 'Paid bookings', value: data.kpis.paidBookings.toLocaleString(), icon: CircleDollarSign },
@@ -239,6 +242,16 @@ export function AnalyticsDashboard() {
           </table>
         </div>
       </section>
+
+      <Ga4AnalyticsSection
+        startDate={format(range.from, 'yyyy-MM-dd')}
+        endDate={format(addDays(range.to, -1), 'yyyy-MM-dd')}
+      />
+
+      <SearchConsoleSection
+        startDate={format(range.from, 'yyyy-MM-dd')}
+        endDate={format(addDays(range.to, -1), 'yyyy-MM-dd')}
+      />
     </div>
   );
 }

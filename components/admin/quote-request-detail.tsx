@@ -6,6 +6,8 @@ import {
   Banknote,
   CalendarCheck,
   CreditCard,
+  Download,
+  FileText,
   LoaderCircle,
   Mail,
   MapPin,
@@ -16,7 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -119,6 +121,8 @@ export function QuoteRequestDetail({
   const sendQuotePaymentLink = useAction(
     api.stripePayments.createQuoteCheckoutSession,
   );
+  const generateQuotePdf = useAction(api.quoteDocuments.generateQuote);
+  const sendQuotePdf = useAction(api.quoteDocuments.sendQuote);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeAction, setActiveAction] = useState<
     "delete" | "convert" | "payment-link" | "manual-payment" | null
@@ -133,6 +137,8 @@ export function QuoteRequestDetail({
   const [manualNote, setManualNote] = useState("");
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isGeneratingQuotePdf, setIsGeneratingQuotePdf] = useState(false);
+  const [isSendingQuotePdf, setIsSendingQuotePdf] = useState(false);
 
   async function handleStatusChange(status: QuoteStatus) {
     setIsUpdating(true);
@@ -224,6 +230,68 @@ export function QuoteRequestDetail({
           : "Unable to record the payment and create the booking.",
       );
       setActiveAction(null);
+    }
+  }
+
+  function downloadBase64Pdf(contentBase64: string, filename: string) {
+    const binary = window.atob(contentBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    const url = URL.createObjectURL(
+      new Blob([bytes], { type: "application/pdf" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleGenerateQuotePdf() {
+    setIsGeneratingQuotePdf(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const result = await generateQuotePdf({ quoteRequestId });
+      downloadBase64Pdf(result.contentBase64, result.filename);
+      setSuccessMessage(`Quote ${result.filename} generated.`);
+    } catch (quoteError) {
+      setError(
+        quoteError instanceof Error
+          ? quoteError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to generate the quote PDF.",
+      );
+    } finally {
+      setIsGeneratingQuotePdf(false);
+    }
+  }
+
+  async function handleSendQuotePdf(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setIsSendingQuotePdf(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const result = await sendQuotePdf({
+        quoteRequestId,
+        to: String(data.get("quoteEmail") ?? ""),
+      });
+      setSuccessMessage(
+        `Quote emailed to ${result.sentTo} at ${formatDate(result.sentAt, true)}.`,
+      );
+    } catch (quoteError) {
+      setError(
+        quoteError instanceof Error
+          ? quoteError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to send the quote PDF.",
+      );
+    } finally {
+      setIsSendingQuotePdf(false);
     }
   }
 
@@ -457,6 +525,160 @@ export function QuoteRequestDetail({
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
+        <Card className="gap-5 border-emerald-200 shadow-sm lg:col-span-3">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <FileText className="size-5 text-emerald-800" />
+              <CardTitle className="text-base">Customer quote PDF</CardTitle>
+            </div>
+            <CardDescription>
+              Download or email a branded PDF containing the customer, service,
+              schedule, pricing and quote details. PDFs are generated from the
+              latest saved quote and are not stored.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)]">
+            <div className="space-y-4">
+              <div className="grid gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 sm:grid-cols-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                    Reference
+                  </p>
+                  <strong className="mt-1 block text-sm text-slate-900">
+                    {quote.reference ?? "Pending"}
+                  </strong>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                    Service
+                  </p>
+                  <strong className="mt-1 block text-sm text-slate-900">
+                    {quote.service?.name ?? quote.serviceType}
+                  </strong>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                    Quoted total
+                  </p>
+                  <strong className="mt-1 block text-sm text-emerald-800">
+                    {quote.estimatedTotalCents === undefined
+                      ? "Not priced"
+                      : formatMoney(quote.estimatedTotalCents)}
+                  </strong>
+                </div>
+              </div>
+              <div className="rounded-xl border border-sky-200 bg-sky-50/60 px-4 py-3 text-sm leading-6 text-sky-900">
+                The PDF asks the customer to call +61 401 356 937 and provide
+                quote reference {quote.reference ?? "shown above"} when they are
+                ready to book.
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleGenerateQuotePdf}
+                disabled={
+                  isGeneratingQuotePdf ||
+                  !quote.reference ||
+                  quote.estimatedTotalCents === undefined
+                }
+              >
+                {isGeneratingQuotePdf ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Download />
+                )}
+                {isGeneratingQuotePdf
+                  ? "Generating…"
+                  : "Download quote PDF"}
+              </Button>
+            </div>
+
+            <div className="space-y-4 lg:border-l lg:border-slate-100 lg:pl-5">
+              <form onSubmit={handleSendQuotePdf} className="space-y-3">
+                <div className="space-y-2">
+                  <label
+                    htmlFor="quote-email"
+                    className="text-sm font-medium text-slate-700"
+                  >
+                    Send quote to
+                  </label>
+                  <Input
+                    id="quote-email"
+                    name="quoteEmail"
+                    type="email"
+                    defaultValue={quote.customer?.email}
+                    placeholder="customer@example.com"
+                    required
+                  />
+                  <p className="text-xs leading-5 text-slate-500">
+                    The recipient can be changed for this email without changing
+                    the customer record.
+                  </p>
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={
+                    isSendingQuotePdf ||
+                    !quote.reference ||
+                    quote.estimatedTotalCents === undefined
+                  }
+                >
+                  {isSendingQuotePdf ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Send />
+                  )}
+                  {isSendingQuotePdf
+                    ? "Generating and sending…"
+                    : "Generate and send quote"}
+                </Button>
+              </form>
+
+              {quote.quoteEmails.length ? (
+                <div className="space-y-2 border-t border-slate-100 pt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Quote email history
+                  </p>
+                  {quote.quoteEmails.slice(0, 5).map((email) => (
+                    <div
+                      key={email._id}
+                      className="rounded-xl bg-slate-50 p-3 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <strong className="min-w-0 truncate text-slate-700">
+                          {email.to}
+                        </strong>
+                        <span
+                          className={`rounded-full px-2 py-0.5 font-semibold ${
+                            email.status === "SENT"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : email.status === "FAILED"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-amber-100 text-amber-800"
+                          }`}
+                        >
+                          {email.status.charAt(0) +
+                            email.status.slice(1).toLowerCase()}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-slate-500">
+                        {email.sentAt
+                          ? `Sent ${formatDate(email.sentAt, true)}`
+                          : `Attempted ${formatDate(email.createdAt, true)}`}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  No quote PDF has been emailed yet.
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         {quote.convertedBookingId && quote.payments.length ? (
           <Card className="gap-5 border-emerald-200 bg-emerald-50/30 shadow-sm lg:col-span-3">
             <CardHeader>

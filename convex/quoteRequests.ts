@@ -943,7 +943,7 @@ export const get = query({
     await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
     const quote = await ctx.db.get(args.quoteRequestId);
     if (!quote) return null;
-    const [customer, service, payments] = await Promise.all([
+    const [customer, service, payments, emailLogs] = await Promise.all([
       ctx.db.get(quote.customerId),
       quote.serviceId ? ctx.db.get(quote.serviceId) : null,
       ctx.db
@@ -953,8 +953,23 @@ export const get = query({
         )
         .order("desc")
         .take(20),
+      ctx.db
+        .query("emailLogs")
+        .withIndex("by_quote_request", (index) =>
+          index.eq("quoteRequestId", quote._id),
+        )
+        .collect(),
     ]);
-    return { ...quote, customer, service, payments };
+    return {
+      ...quote,
+      customer,
+      service,
+      payments,
+      quoteEmails: emailLogs
+        .filter((email) => email.type === "QUOTE")
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 20),
+    };
   },
 });
 

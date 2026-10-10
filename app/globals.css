@@ -63,3 +63,9 @@ html{scroll-behavior:smooth}.site-navigation{position:sticky;top:0;z-index:100;b
 #office-cleaning .finalCta>.action{position:relative;z-index:1;min-width:270px;min-height:58px}
 
 @media(max-width:820px){#office-cleaning .heroActions .action,#office-cleaning .sectionHeading>.action,#office-cleaning .finalCta>.action{width:100%;min-width:0}}
+
+/* Keep every public navigation item visually consistent, including the dropdown trigger. */
+.header nav .services-trigger{border:0;background:transparent;font:inherit;line-height:inherit;letter-spacing:inherit}
+.header nav>a,.header nav .services-trigger{position:relative;font-size:13px;font-weight:700}
+.header nav>a:after,.header nav .services-trigger:after{position:absolute;right:0;bottom:7px;left:0;height:2px;border-radius:4px;background:#008575;content:"";transform:scaleX(0);transform-origin:center;transition:transform .2s ease}
+.header nav>a:hover:after,.header nav>a.active:after,.header nav .services-menu:hover .services-trigger:after,.header nav .services-menu:focus-within .services-trigger:after{transform:scaleX(1)}

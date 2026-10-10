@@ -4,6 +4,7 @@ import { internalMutation } from "./_generated/server";
 const emailType = v.union(
   v.literal("BOOKING_CONFIRMATION"),
   v.literal("QUOTE_REQUEST_RECEIVED"),
+  v.literal("QUOTE"),
   v.literal("QUOTE_PAYMENT_LINK"),
   v.literal("BOOKING_PAYMENT_LINK"),
   v.literal("INVOICE"),

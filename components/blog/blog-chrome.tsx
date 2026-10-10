@@ -23,8 +23,9 @@ export function BlogHeader() {
         <nav aria-label="Main navigation" className={menuOpen ? styles.navOpen : undefined}>
           <Link href="/">Home</Link>
           <Link href="/#services">Services</Link>
-          <Link href="/endofleaseclean">End of lease</Link>
-          <Link href="/officecleaning">Commercial</Link>
+          <Link href="/#bond-guarantee">Bond guarantee</Link>
+          <Link href="/#why-wedo">Why WeDo</Link>
+          <Link href="/#service-areas">Service areas</Link>
           <Link href="/blog" className={styles.active}>Blog</Link>
         </nav>
         <div className={styles.utilities}>

@@ -36,10 +36,10 @@ import styles from "./page.module.css";
 
 const homeNavLinks = [
   ["Home", "/"],
-  ["Services", "#included"],
-  ["Bond guarantee", "#bond-guarantee"],
-  ["Why WeDo", "#process"],
-  ["Service areas", "#service-areas"],
+  ["Services", "/#services"],
+  ["Bond guarantee", "/#bond-guarantee"],
+  ["Why WeDo", "/#why-wedo"],
+  ["Service areas", "/#service-areas"],
   ["Blog", "/blog"],
 ] as const;
 

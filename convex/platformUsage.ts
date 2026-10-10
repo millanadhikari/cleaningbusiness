@@ -7,6 +7,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const RESEND_DAILY_LIMIT = 100;
 const RESEND_MONTHLY_LIMIT = 3_000;
 const CLERK_MONTHLY_RETAINED_USER_LIMIT = 50_000;
+const CLOUDFLARE_DAILY_NEURON_LIMIT = 10_000;
 
 function utcDayStart(value: number) {
   const date = new Date(value);
@@ -52,6 +53,15 @@ export const overview = query({
         failed: v.number(),
       }),
     ),
+    cloudflare: v.object({
+      inputTokens: v.number(),
+      outputTokens: v.number(),
+      totalTokens: v.number(),
+      estimatedNeurons: v.number(),
+      limitNeurons: v.number(),
+      startsAt: v.number(),
+      requestCount: v.number(),
+    }),
   }),
   handler: async (ctx) => {
     await requireSuperAdmin(ctx);
@@ -64,6 +74,12 @@ export const overview = query({
       .query('emailLogs')
       .withIndex('by_created_at', (index) =>
         index.gte('createdAt', Math.min(monthStart, trendStart)),
+      )
+      .collect();
+    const aiUsage = await ctx.db
+      .query('aiUsageEvents')
+      .withIndex('by_provider_and_created_at', (index) =>
+        index.eq('provider', 'CLOUDFLARE').gte('createdAt', todayStart),
       )
       .collect();
 
@@ -93,6 +109,18 @@ export const overview = query({
       daily: { ...daily, limit: RESEND_DAILY_LIMIT, startsAt: todayStart },
       monthly: { ...monthly, limit: RESEND_MONTHLY_LIMIT, startsAt: monthStart },
       emailTrend: trend,
+      cloudflare: {
+        inputTokens: aiUsage.reduce((sum, item) => sum + item.inputTokens, 0),
+        outputTokens: aiUsage.reduce((sum, item) => sum + item.outputTokens, 0),
+        totalTokens: aiUsage.reduce((sum, item) => sum + item.totalTokens, 0),
+        estimatedNeurons: aiUsage.reduce(
+          (sum, item) => sum + (item.estimatedNeurons ?? 0),
+          0,
+        ),
+        limitNeurons: CLOUDFLARE_DAILY_NEURON_LIMIT,
+        startsAt: todayStart,
+        requestCount: aiUsage.length,
+      },
     };
   },
 });
@@ -122,6 +150,7 @@ export const providerSnapshot = action({
     updatedAt: v.number(),
     resendConfigured: v.boolean(),
     stripeConfigured: v.boolean(),
+    cloudflareConfigured: v.boolean(),
     clerk: v.object({
       status: v.union(
         v.literal('AVAILABLE'),
@@ -148,6 +177,10 @@ export const providerSnapshot = action({
       updatedAt,
       resendConfigured: Boolean(process.env.RESEND_API_KEY?.trim()),
       stripeConfigured: Boolean(process.env.STRIPE_API_KEY?.trim()),
+      cloudflareConfigured: Boolean(
+        process.env.CLOUDFLARE_ACCOUNT_ID?.trim() &&
+        process.env.CLOUDFLARE_API_TOKEN?.trim(),
+      ),
     };
 
     if (!secretKey) {

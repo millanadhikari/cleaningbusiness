@@ -27,6 +27,18 @@ function displayName(user: { firstName?: string; lastName?: string; email?: stri
   return [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || "Admin";
 }
 
+function senderAddress(value: string) {
+  const bracketed = value.match(/<([^>]+)>/);
+  return (bracketed?.[1] ?? value).trim().toLowerCase();
+}
+
+function messagePreview(value: string) {
+  const replyStart = value.search(/\n(?:On .+ wrote:|From:|Sent:|-{2,}\s*Original Message\s*-{2,})/i);
+  const currentMessage = replyStart >= 0 ? value.slice(0, replyStart) : value;
+  const normalized = currentMessage.replace(/\s+/g, " ").trim();
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}…` : normalized;
+}
+
 export const getConnectionStatus = query({
   args: {},
   handler: async (ctx) => {
@@ -734,14 +746,41 @@ export const markConversationRead = mutation({
 });
 
 export const getUnmatchedInbox = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { dismissed: v.boolean() },
+  handler: async (ctx, { dismissed }) => {
     await requireRole(ctx, adminRoles);
-    const [messages, quotes, bookings] = await Promise.all([
-      ctx.db.query("unmatchedEmailMessages").withIndex("by_received_at").order("desc").take(200),
+    const [messages, pendingRows, dismissedRows, quotes, bookings] = await Promise.all([
+      dismissed
+        ? ctx.db
+            .query("unmatchedEmailMessages")
+            .withIndex("by_dismissed_received_at", (index) => index.gt("dismissedAt", 0))
+            .order("desc")
+            .take(250)
+        : ctx.db
+            .query("unmatchedEmailMessages")
+            .withIndex("by_dismissed_received_at", (index) => index.eq("dismissedAt", undefined))
+            .order("desc")
+            .take(250),
+      ctx.db
+        .query("unmatchedEmailMessages")
+        .withIndex("by_dismissed_received_at", (index) => index.eq("dismissedAt", undefined))
+        .take(201),
+      ctx.db
+        .query("unmatchedEmailMessages")
+        .withIndex("by_dismissed_received_at", (index) => index.gt("dismissedAt", 0))
+        .take(201),
       ctx.db.query("quoteRequests").withIndex("by_created_at").order("desc").take(100),
       ctx.db.query("bookings").withIndex("by_created_at").order("desc").take(100),
     ]);
+    const senderEmails = [...new Set(messages.map((message) => senderAddress(message.from)).filter(Boolean))];
+    const matchedCustomers = await Promise.all(senderEmails.map((email) =>
+      ctx.db.query("customers").withIndex("by_email", (index) => index.eq("email", email)).first()
+    ));
+    const customersByEmail = new Map(
+      matchedCustomers.flatMap((customer) => customer?.email
+        ? [[customer.email.toLowerCase(), customer] as const]
+        : []),
+    );
     const customerIds = new Set<Id<"customers">>([
       ...quotes.map((item) => item.customerId),
       ...bookings.map((item) => item.customerId),
@@ -762,11 +801,32 @@ export const getUnmatchedInbox = query({
       grouped.set(message.gmailThreadId, [...(grouped.get(message.gmailThreadId) ?? []), message]);
     }
     return {
-      threads: [...grouped.entries()].map(([gmailThreadId, threadMessages]) => ({
-        gmailThreadId,
-        latestAt: Math.max(...threadMessages.map((message) => message.sentAt)),
-        messages: threadMessages.sort((a, b) => a.sentAt - b.sentAt),
-      })),
+      pendingCount: pendingRows.length,
+      pendingCountCapped: pendingRows.length > 200,
+      dismissedCount: dismissedRows.length,
+      dismissedCountCapped: dismissedRows.length > 200,
+      threads: [...grouped.entries()]
+        .map(([gmailThreadId, threadMessages]) => {
+          const ordered = threadMessages.sort((a, b) => a.sentAt - b.sentAt);
+          const latest = ordered.at(-1)!;
+          const customer = ordered
+            .map((message) => customersByEmail.get(senderAddress(message.from)))
+            .find(Boolean);
+          return {
+            gmailThreadId,
+            latestAt: latest.sentAt,
+            messageCount: ordered.length,
+            firstMessageId: ordered[0]._id,
+            subject: latest.subject,
+            from: latest.from,
+            preview: messagePreview(latest.bodyText),
+            likelyCustomer: Boolean(customer),
+            customerName: customer
+              ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
+              : undefined,
+          };
+        })
+        .sort((a, b) => b.latestAt - a.latestAt),
       targets: [
         ...bookings.map((booking) => ({
           type: "BOOKING" as const,
@@ -787,11 +847,51 @@ export const getUnmatchedInbox = query({
   },
 });
 
+export const getUnmatchedThread = query({
+  args: { gmailThreadId: v.string() },
+  handler: async (ctx, { gmailThreadId }) => {
+    await requireRole(ctx, adminRoles);
+    const messages = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", gmailThreadId))
+      .collect();
+    return messages
+      .sort((a, b) => a.sentAt - b.sentAt)
+      .map((message) => ({
+        _id: message._id,
+        from: message.from,
+        subject: message.subject,
+        bodyText: message.bodyText,
+        sentAt: message.sentAt,
+      }));
+  },
+});
+
+export const setUnmatchedThreadDismissed = mutation({
+  args: { gmailThreadId: v.string(), dismissed: v.boolean() },
+  handler: async (ctx, { gmailThreadId, dismissed }) => {
+    const user = await requireRole(ctx, adminRoles);
+    const messages = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", gmailThreadId))
+      .collect();
+    const dismissedAt = dismissed ? Date.now() : undefined;
+    await Promise.all(messages.map((message) => ctx.db.patch(message._id, {
+      dismissedAt,
+      dismissedByUserId: dismissed ? user._id : undefined,
+    })));
+    return { updated: messages.length };
+  },
+});
+
 export const getUnmatchedCount = query({
   args: {},
   handler: async (ctx) => {
     await requireRole(ctx, adminRoles);
-    return (await ctx.db.query("unmatchedEmailMessages").withIndex("by_received_at").take(201)).length;
+    return (await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_dismissed_received_at", (index) => index.eq("dismissedAt", undefined))
+      .take(201)).length;
   },
 });
 

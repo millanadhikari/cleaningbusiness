@@ -318,6 +318,65 @@ export default defineSchema({
     estimatedNeurons: v.optional(v.number()),
     createdAt: v.number(),
   }).index("by_provider_and_created_at", ["provider", "createdAt"]),
+  crmAiSessions: defineTable({
+    userId: v.id("users"),
+    role: v.union(v.literal("SUPER_ADMIN"), v.literal("ADMIN")),
+    title: v.optional(v.string()),
+    currentContextType: v.optional(
+      v.union(
+        v.literal("CUSTOMER"),
+        v.literal("BOOKING"),
+        v.literal("QUOTE"),
+        v.literal("EMAIL_THREAD"),
+        v.literal("ANALYTICS"),
+        v.literal("DASHBOARD"),
+      ),
+    ),
+    currentContextId: v.optional(v.string()),
+    pendingAction: v.optional(
+      v.object({
+        toolName: v.literal("addInternalNote"),
+        entityType: v.literal("BOOKING"),
+        entityId: v.string(),
+        body: v.string(),
+        preparedAt: v.number(),
+      }),
+    ),
+    status: v.union(v.literal("ACTIVE"), v.literal("CLOSED")),
+    messageWindowStartedAt: v.optional(v.number()),
+    messageCount: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastMessageAt: v.number(),
+  })
+    .index("by_user_and_last_message", ["userId", "lastMessageAt"])
+    .index("by_user_and_status", ["userId", "status"]),
+  crmAiMessages: defineTable({
+    sessionId: v.id("crmAiSessions"),
+    role: v.union(v.literal("USER"), v.literal("ASSISTANT"), v.literal("TOOL")),
+    content: v.string(),
+    toolName: v.optional(v.string()),
+    toolCallId: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_session_and_created_at", ["sessionId", "createdAt"]),
+  crmAiAuditLogs: defineTable({
+    userId: v.id("users"),
+    sessionId: v.id("crmAiSessions"),
+    tool: v.string(),
+    eventType: v.union(
+      v.literal("CRM_AI_SESSION_STARTED"),
+      v.literal("CRM_AI_TOOL_USED"),
+      v.literal("CRM_AI_DRAFT_EMAIL_CREATED"),
+      v.literal("CRM_AI_NOTE_CREATED"),
+    ),
+    entityType: v.optional(v.string()),
+    entityId: v.optional(v.string()),
+    success: v.boolean(),
+    errorCode: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_session_and_created_at", ["sessionId", "createdAt"])
+    .index("by_user_and_created_at", ["userId", "createdAt"]),
   serviceAreaSettings: defineTable({
     key: v.literal("DEFAULT"),
     centreName: v.string(),
@@ -740,6 +799,7 @@ export default defineSchema({
     authorName: v.string(),
     kind: v.union(v.literal("ADMIN_NOTE"), v.literal("JOB_NOTE")),
     body: v.string(),
+    source: v.optional(v.literal("CRM_AI")),
     photoUrls: v.optional(v.array(v.string())),
     createdAt: v.number(),
   }).index("by_booking_and_created_at", ["bookingId", "createdAt"]),

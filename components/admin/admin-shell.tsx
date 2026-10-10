@@ -27,6 +27,7 @@ import {
   Building2,
 } from 'lucide-react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +44,11 @@ import {
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
+
+const CrmAiAssistant = dynamic(
+  () => import('@/components/admin/crm-ai-assistant').then((module) => module.CrmAiAssistant),
+  { ssr: false },
+);
 
 type AdminRole = 'SUPER_ADMIN' | 'ADMIN';
 
@@ -150,6 +156,15 @@ function getPageTitle(pathname: string) {
     return 'Service Configuration';
   }
   return 'Administration';
+}
+
+function getAiContext(pathname: string) {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts[1] === 'bookings' && parts[2]) return { contextType: 'BOOKING' as const, contextId: parts[2] };
+  if (parts[1] === 'customers' && parts[2]) return { contextType: 'CUSTOMER' as const, contextId: parts[2] };
+  if (parts[1] === 'quotes' && parts[2] && parts[2] !== 'new') return { contextType: 'QUOTE' as const, contextId: parts[2] };
+  if (pathname.startsWith('/admin/analytics')) return { contextType: 'ANALYTICS' as const };
+  return { contextType: 'DASHBOARD' as const };
 }
 
 function SidebarNavigation({
@@ -311,6 +326,7 @@ export function AdminShell({ children, user }: AdminShellProps) {
   const unmatchedCount = useQuery(api.gmail.getUnmatchedCount, isAuthenticated ? {} : 'skip') ?? 0;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const pageTitle = getPageTitle(pathname);
+  const aiContext = getAiContext(pathname);
 
   return (
     <div className="min-h-screen bg-[#f5f8f7] text-[#183e3b]">
@@ -456,6 +472,7 @@ export function AdminShell({ children, user }: AdminShellProps) {
           <div className="mx-auto max-w-[1440px]">{children}</div>
         </main>
       </div>
+      <CrmAiAssistant {...aiContext} role={user.role} />
     </div>
   );
 }

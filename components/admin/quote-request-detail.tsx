@@ -393,6 +393,11 @@ export function QuoteRequestDetail({
                   : "Custom quote"}
               </span>
             ) : null}
+            {quote.source === "AI_CHAT" ? (
+              <span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-800">
+                Created via AI chat
+              </span>
+            ) : null}
             {quote.serviceAreaStatus ? (
               <span
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${

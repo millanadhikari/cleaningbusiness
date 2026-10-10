@@ -1,0 +1,29 @@
+.card {
+  margin: 12px 0;
+  border: 1px solid #bddbd2;
+  border-radius: 17px;
+  background: #fff;
+  padding: 15px;
+  box-shadow: 0 9px 24px #173d3512;
+}
+
+.eyebrow {
+  color: #087f70;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.card h3 { margin: 5px 0 10px; color: #173f3b; font-size: 15px; }
+.card dl { margin: 0; }
+.card dl div { display: grid; grid-template-columns: 92px 1fr; gap: 8px; border-top: 1px solid #edf2f0; padding: 6px 0; font-size: 11px; }
+.card dt { color: #78908b; }
+.card dd { margin: 0; color: #294b47; font-weight: 700; overflow-wrap: anywhere; }
+.card .total dd { color: #087f70; font-size: 14px; }
+
+.actions { display: grid; grid-template-columns: 1.3fr 1fr; gap: 7px; margin-top: 11px; }
+.actions button { display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #bed8d2; border-radius: 10px; background: #fff; padding: 9px 7px; color: #17665d; font-size: 10px; font-weight: 850; cursor: pointer; }
+.actions button:first-child { border-color: #087f70; background: #087f70; color: #fff; }
+.actions button:disabled { opacity: 0.55; cursor: not-allowed; }
+.actions svg { width: 13px; height: 13px; }

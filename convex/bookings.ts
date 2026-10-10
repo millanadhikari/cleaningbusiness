@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { requireRole } from "./lib/auth";
 import { allocateWorkReference } from "./lib/workReferences";
 import { calculateEstimateForService } from "./services";
@@ -77,7 +78,7 @@ function optionalText(
   return cleaned;
 }
 
-function normalizeEmail(value: string | undefined) {
+export function normalizeEmail(value: string | undefined) {
   if (!value) return undefined;
   const email = value.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
@@ -86,14 +87,14 @@ function normalizeEmail(value: string | undefined) {
   return email;
 }
 
-function normalizePhone(value: string) {
+export function normalizePhone(value: string) {
   const digits = value.replace(/\D/g, "");
   if (/^61[23478]\d{8}$/.test(digits)) return `+61${digits.slice(2)}`;
   if (/^0[23478]\d{8}$/.test(digits)) return `+61${digits.slice(1)}`;
   throw new Error("Enter a valid Australian phone number.");
 }
 
-function validateSchedule(date: string, time: string) {
+export function validateSchedule(date: string, time: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
     throw new Error("Select a valid requested date.");
   const parsed = new Date(`${date}T12:00:00.000Z`);
@@ -108,6 +109,60 @@ function validateSchedule(date: string, time: string) {
   if (parsed < today) throw new Error("Requested date cannot be in the past.");
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
     throw new Error("Select a valid requested time.");
+}
+
+export type BookingDetailsInput = {
+  firstName: string;
+  lastName?: string;
+  email?: string;
+  phone: string;
+  addressLine1: string;
+  addressLine2?: string;
+  suburb: string;
+  state: string;
+  postcode: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  notes?: string;
+};
+
+export async function applyBookingDetails(
+  ctx: MutationCtx,
+  booking: Doc<"bookings">,
+  args: BookingDetailsInput,
+  options: { recheckAvailability: boolean },
+) {
+  const firstName = requiredText(args.firstName, "First name", 80);
+  const lastName = optionalText(args.lastName, "Last name", 80);
+  const email = normalizeEmail(args.email);
+  const phone = normalizePhone(args.phone);
+  const addressLine1 = requiredText(args.addressLine1, "Address", 160);
+  const addressLine2 = optionalText(args.addressLine2, "Address line 2", 160);
+  const suburb = requiredText(args.suburb, "Suburb", 80);
+  const state = requiredText(args.state, "State", 3).toUpperCase();
+  const postcode = args.postcode.trim();
+  const notes = optionalText(args.notes, "Notes", 2000);
+  if (!new Set(["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"]).has(state)) {
+    throw new Error("Select a valid Australian state or territory.");
+  }
+  if (!/^\d{4}$/.test(postcode)) throw new Error("Postcode must contain four digits.");
+  validateSchedule(args.scheduledDate, args.scheduledTime);
+  if (options.recheckAvailability) {
+    await ensurePublicSlotAvailable(ctx, args.scheduledDate, args.scheduledTime, booking._id);
+  }
+  const now = Date.now();
+  await ctx.db.patch(booking.customerId, { firstName, lastName, email, phone, updatedAt: now });
+  await ctx.db.patch(booking._id, {
+    addressLine1,
+    addressLine2,
+    suburb,
+    state,
+    postcode,
+    scheduledDate: args.scheduledDate,
+    scheduledTime: args.scheduledTime,
+    notes,
+    updatedAt: now,
+  });
 }
 
 export const createWebsiteBooking = mutation({
@@ -422,41 +477,10 @@ export const updateDetails = mutation({
     await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found.");
-
-    const firstName = requiredText(args.firstName, "First name", 80);
-    const lastName = optionalText(args.lastName, "Last name", 80);
-    const email = normalizeEmail(args.email);
-    const phone = normalizePhone(args.phone);
-    const addressLine1 = requiredText(args.addressLine1, "Address", 160);
-    const addressLine2 = optionalText(args.addressLine2, "Address line 2", 160);
-    const suburb = requiredText(args.suburb, "Suburb", 80);
-    const state = requiredText(args.state, "State", 3).toUpperCase();
-    const postcode = args.postcode.trim();
-    const notes = optionalText(args.notes, "Notes", 2000);
-    if (!new Set(["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"]).has(state)) {
-      throw new Error("Select a valid Australian state or territory.");
-    }
-    if (!/^\d{4}$/.test(postcode)) throw new Error("Postcode must contain four digits.");
-    validateSchedule(args.scheduledDate, args.scheduledTime);
-
-    const now = Date.now();
-    await ctx.db.patch(booking.customerId, {
-      firstName,
-      lastName,
-      email,
-      phone,
-      updatedAt: now,
-    });
-    await ctx.db.patch(booking._id, {
-      addressLine1,
-      addressLine2,
-      suburb,
-      state,
-      postcode,
-      scheduledDate: args.scheduledDate,
-      scheduledTime: args.scheduledTime,
-      notes,
-      updatedAt: now,
+    await applyBookingDetails(ctx, booking, args, {
+      recheckAvailability:
+        booking.scheduledDate !== args.scheduledDate ||
+        booking.scheduledTime !== args.scheduledTime,
     });
     return null;
   },

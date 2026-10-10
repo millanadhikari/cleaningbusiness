@@ -31,6 +31,54 @@ const answerValue = v.union(
 
 export type AnswerValue = number | boolean | string | string[];
 
+export type QuoteSubmissionInput = {
+  submissionKey: string;
+  sessionId?: string;
+  firstName: string;
+  lastName?: string;
+  email?: string;
+  phone: string;
+  serviceId?: Id<"services">;
+  answers?: Record<string, AnswerValue>;
+  serviceType: string;
+  addressLine1: string;
+  addressLine2?: string;
+  suburb: string;
+  state: string;
+  postcode: string;
+  preferredDate?: string;
+  preferredTime?: string;
+  propertyType?: string;
+  bedrooms?: number;
+  bathrooms?: number;
+  notes?: string;
+  requestType?: "CUSTOM_QUOTE" | "CALLBACK_REQUEST";
+};
+
+const quoteSubmissionFields = {
+  submissionKey: v.string(),
+  sessionId: v.optional(v.string()),
+  firstName: v.string(),
+  lastName: v.optional(v.string()),
+  email: v.optional(v.string()),
+  phone: v.string(),
+  serviceId: v.optional(v.id("services")),
+  answers: v.optional(v.record(v.string(), answerValue)),
+  serviceType: v.string(),
+  addressLine1: v.string(),
+  addressLine2: v.optional(v.string()),
+  suburb: v.string(),
+  state: v.string(),
+  postcode: v.string(),
+  preferredDate: v.optional(v.string()),
+  preferredTime: v.optional(v.string()),
+  propertyType: v.optional(v.string()),
+  bedrooms: v.optional(v.number()),
+  bathrooms: v.optional(v.number()),
+  notes: v.optional(v.string()),
+  requestType: v.optional(requestType),
+};
+
 const adminQuoteFields = {
   firstName: v.string(),
   lastName: v.optional(v.string()),
@@ -308,35 +356,14 @@ export async function prepareAdminQuote(ctx: MutationCtx, args: AdminQuoteInput)
   };
 }
 
-export const submit = mutation({
-  args: {
-    submissionKey: v.string(),
-    sessionId: v.optional(v.string()),
-    firstName: v.string(),
-    lastName: v.optional(v.string()),
-    email: v.optional(v.string()),
-    phone: v.string(),
-    serviceId: v.optional(v.id("services")),
-    answers: v.optional(v.record(v.string(), answerValue)),
-    serviceType: v.string(),
-    addressLine1: v.string(),
-    addressLine2: v.optional(v.string()),
-    suburb: v.string(),
-    state: v.string(),
-    postcode: v.string(),
-    preferredDate: v.optional(v.string()),
-    preferredTime: v.optional(v.string()),
-    propertyType: v.optional(v.string()),
-    bedrooms: v.optional(v.number()),
-    bathrooms: v.optional(v.number()),
-    notes: v.optional(v.string()),
-    requestType: v.optional(requestType),
+export async function submitQuoteRequest(
+  ctx: MutationCtx,
+  args: QuoteSubmissionInput,
+  options: {
+    source: "WEBSITE" | "AI_CHAT";
+    chatSessionId?: Id<"chatSessions">;
   },
-  returns: v.object({
-    quoteRequestId: v.id("quoteRequests"),
-    reference: v.string(),
-  }),
-  handler: async (ctx, args) => {
+) {
     const submissionKey = args.submissionKey.trim();
     if (!/^[0-9a-f-]{36}$/i.test(submissionKey)) {
       throw new Error("The quote submission identifier is invalid.");
@@ -359,7 +386,12 @@ export const submit = mutation({
         existingSubmission._id,
         existingSubmission.customerId,
       );
-      return { quoteRequestId: existingSubmission._id, reference };
+      return {
+        quoteRequestId: existingSubmission._id,
+        reference,
+        customerId: existingSubmission.customerId,
+        estimatedTotalCents: existingSubmission.estimatedTotalCents,
+      };
     }
 
     const firstName = requiredText(args.firstName, "First name", 80);
@@ -440,7 +472,7 @@ export const submit = mutation({
         email,
         phone,
         status: "ACTIVE",
-        source: "WEBSITE",
+        source: options.source,
         createdAt: now,
         updatedAt: now,
       });
@@ -497,7 +529,8 @@ export const submit = mutation({
       submissionKey,
       customerId,
       serviceId: args.serviceId,
-      source: "WEBSITE",
+      source: options.source,
+      chatSessionId: options.chatSessionId,
       pricingSource: args.serviceId ? "SERVICE" : undefined,
       serviceType,
       addressLine1,
@@ -563,7 +596,29 @@ export const submit = mutation({
       );
     }
 
-    return { quoteRequestId, reference };
+    return {
+      quoteRequestId,
+      reference,
+      customerId,
+      estimatedTotalCents:
+        estimateSnapshot?.type === "ESTIMATE"
+          ? estimateSnapshot.total
+          : undefined,
+    };
+}
+
+export const submit = mutation({
+  args: quoteSubmissionFields,
+  returns: v.object({
+    quoteRequestId: v.id("quoteRequests"),
+    reference: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const result = await submitQuoteRequest(ctx, args, { source: "WEBSITE" });
+    return {
+      quoteRequestId: result.quoteRequestId,
+      reference: result.reference,
+    };
   },
 });
 

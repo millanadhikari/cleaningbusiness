@@ -1,7 +1,13 @@
 "use client";
 
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
-import { ArrowLeft, Calculator, LoaderCircle, Save } from "lucide-react";
+import {
+  ArrowLeft,
+  Calculator,
+  CircleDollarSign,
+  LoaderCircle,
+  Save,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
@@ -16,6 +22,18 @@ import { AdminListHeader, AdminListPage } from "./admin-list-layout";
 
 type AnswerValue = number | boolean | string | string[];
 type PricingSource = "SERVICE" | "CUSTOM";
+type PricingPreview =
+  | {
+      type: "ESTIMATE";
+      total: number;
+      breakdown: Array<{ label: string; amount: number }>;
+    }
+  | {
+      type: "HOURLY";
+      hourlyRate: number | null;
+      minimumHours?: number;
+    }
+  | { type: "CUSTOM_REQUIRED" };
 
 const states = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"];
 
@@ -62,6 +80,189 @@ function pricingRuleLabel(rule: Doc<"servicePricingRules">) {
     return `${rule.includedQuantity} included · ${formatMoney(rule.amount)} each after`;
   }
   return `${formatMoney(rule.amount)} each`;
+}
+
+function answerIsSelected(value: AnswerValue | undefined) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (typeof value === "string") {
+    return value.trim().length > 0 && value !== "false";
+  }
+  return Array.isArray(value) && value.length > 0;
+}
+
+function answerIsMissing(value: AnswerValue | undefined) {
+  if (value === undefined) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  return Array.isArray(value) && value.length === 0;
+}
+
+function calculatePricingPreview(
+  pricingModel: Doc<"services">["pricingModel"] | undefined,
+  rules: Doc<"servicePricingRules">[],
+  answers: Record<string, AnswerValue>,
+): PricingPreview | null {
+  if (!pricingModel) return null;
+  if (pricingModel === "CUSTOM_QUOTE") return { type: "CUSTOM_REQUIRED" };
+
+  if (pricingModel === "HOURLY") {
+    const hourlyRule = rules.find(
+      (rule) => rule.ruleType === "HOURLY_RATE",
+    );
+    return {
+      type: "HOURLY",
+      hourlyRate: hourlyRule?.amount ?? null,
+      minimumHours: hourlyRule?.minQuantity,
+    };
+  }
+
+  const effectiveAnswers = { ...answers };
+  if (effectiveAnswers.carpetSteam !== true) {
+    delete effectiveAnswers.carpetRooms;
+  }
+
+  const breakdown: Array<{ label: string; amount: number }> = [];
+  let total = 0;
+
+  for (const rule of rules) {
+    let amount = 0;
+    if (rule.ruleType === "BASE_PRICE") {
+      amount = rule.amount;
+    } else if (rule.ruleType === "PER_UNIT" && rule.questionKey) {
+      const answer = effectiveAnswers[rule.questionKey];
+      let quantity =
+        typeof answer === "number" && Number.isFinite(answer) ? answer : 0;
+      if (rule.minQuantity !== undefined) {
+        quantity = Math.max(quantity, rule.minQuantity);
+      }
+      if (rule.maxQuantity !== undefined) {
+        quantity = Math.min(quantity, rule.maxQuantity);
+      }
+      amount = Math.round(
+        rule.amount *
+          Math.max(0, quantity - (rule.includedQuantity ?? 0)),
+      );
+    } else if (
+      rule.ruleType === "FIXED_ADDON" &&
+      rule.questionKey &&
+      answerIsSelected(effectiveAnswers[rule.questionKey])
+    ) {
+      amount = rule.amount;
+    } else if (rule.ruleType === "PERCENTAGE") {
+      amount = Math.round((total * rule.amount) / 10_000);
+    }
+
+    if (amount > 0) {
+      total += amount;
+      breakdown.push({ label: rule.name, amount });
+    }
+  }
+
+  return breakdown.length
+    ? { type: "ESTIMATE", total, breakdown }
+    : { type: "CUSTOM_REQUIRED" };
+}
+
+function LivePriceSummary({
+  serviceSelected,
+  pricingSource,
+  preview,
+  customTotalCents,
+  servicePriceIsComplete,
+}: {
+  serviceSelected: boolean;
+  pricingSource: PricingSource;
+  preview: PricingPreview | null;
+  customTotalCents?: number;
+  servicePriceIsComplete: boolean;
+}) {
+  const customTotalIsValid =
+    customTotalCents !== undefined &&
+    Number.isFinite(customTotalCents) &&
+    customTotalCents > 0;
+  const total =
+    pricingSource === "CUSTOM"
+      ? customTotalIsValid
+        ? customTotalCents
+        : undefined
+      : preview?.type === "ESTIMATE"
+        ? preview.total
+        : undefined;
+
+  return (
+    <aside className="rounded-2xl border border-emerald-200 bg-[#f3fbf7] p-5 shadow-[0_8px_24px_rgba(8,127,112,0.08)] lg:sticky lg:top-24">
+      <div className="flex items-center gap-2 text-emerald-800">
+        <CircleDollarSign className="size-5" />
+        <p className="text-xs font-bold uppercase tracking-[0.12em]">
+          Live quote total
+        </p>
+      </div>
+
+      {!serviceSelected ? (
+        <p className="mt-4 text-sm text-slate-600">
+          Select a service to calculate the price.
+        </p>
+      ) : total !== undefined ? (
+        <>
+          <p
+            aria-live="polite"
+            className="mt-3 text-4xl font-extrabold tracking-tight text-[#173c38]"
+          >
+            {formatMoney(total)}
+          </p>
+          <p className="mt-1 text-xs font-medium text-slate-600">
+            {pricingSource === "CUSTOM"
+              ? "Custom quoted price"
+              : servicePriceIsComplete
+                ? "Final total from the selected options"
+                : "Current total · complete required options to finalise"}
+          </p>
+          {pricingSource === "SERVICE" &&
+          preview?.type === "ESTIMATE" &&
+          preview.breakdown.length ? (
+            <div className="mt-4 space-y-2 border-t border-emerald-200 pt-4">
+              {preview.breakdown.map((item, index) => (
+                <div
+                  key={`${item.label}-${index}`}
+                  className="flex items-start justify-between gap-3 text-sm"
+                >
+                  <span className="text-slate-600">{item.label}</span>
+                  <span className="shrink-0 font-semibold text-slate-900">
+                    {formatMoney(item.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : pricingSource === "CUSTOM" ? (
+        <p className="mt-4 text-sm text-slate-600">
+          Enter the agreed custom amount to show the total.
+        </p>
+      ) : preview?.type === "HOURLY" ? (
+        <div className="mt-4">
+          <p className="text-2xl font-bold text-[#173c38]">
+            {preview.hourlyRate === null
+              ? "Rate not configured"
+              : `${formatMoney(preview.hourlyRate)} / hour`}
+          </p>
+          {preview.minimumHours ? (
+            <p className="mt-1 text-sm text-slate-600">
+              Minimum {preview.minimumHours} hours
+            </p>
+          ) : null}
+          <p className="mt-3 text-xs text-slate-500">
+            Choose a custom quoted price when you have agreed the exact total.
+          </p>
+        </div>
+      ) : (
+        <p className="mt-4 text-sm text-slate-600">
+          This service needs a custom quoted price before an exact total can be
+          provided.
+        </p>
+      )}
+    </aside>
+  );
 }
 
 export function AdminQuoteForm({
@@ -118,6 +319,11 @@ function AdminQuoteEditor({
       ]),
     ),
   );
+  const [customTotal, setCustomTotal] = useState(
+    quote?.estimatedTotalCents === undefined
+      ? ""
+      : (quote.estimatedTotalCents / 100).toFixed(2),
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const serviceConfiguration = useQuery(
@@ -133,6 +339,22 @@ function AdminQuoteEditor({
   const generalPricingRules = pricingRules?.filter(
     (rule) => !rule.questionKey,
   );
+  const pricingPreview = calculatePricingPreview(
+    serviceConfiguration?.service.pricingModel,
+    pricingRules ?? [],
+    answers,
+  );
+  const missingRequiredAnswers =
+    questions?.filter(
+      (question) =>
+        question.required && answerIsMissing(answers[question.key]),
+    ).length ?? 0;
+  const carpetRoomsMissing =
+    answers.carpetSteam === true &&
+    (typeof answers.carpetRooms !== "number" || answers.carpetRooms < 1);
+  const servicePriceIsComplete =
+    missingRequiredAnswers === 0 && !carpetRoomsMissing;
+  const customTotalCents = centsFromDollars(customTotal);
 
   const customer = quote?.customer;
   const isEdit = Boolean(quoteRequestId);
@@ -152,7 +374,7 @@ function AdminQuoteEditor({
       answers,
       customTotalCents:
         pricingSource === "CUSTOM"
-          ? centsFromDollars(optionalString(data, "customTotal"))
+          ? customTotalCents
           : undefined,
       addressLine1: String(data.get("addressLine1") ?? ""),
       addressLine2: optionalString(data, "addressLine2"),
@@ -317,11 +539,8 @@ function AdminQuoteEditor({
                   min="0.01"
                   max="1000000"
                   step="0.01"
-                  defaultValue={
-                    quote?.estimatedTotalCents === undefined
-                      ? undefined
-                      : (quote.estimatedTotalCents / 100).toFixed(2)
-                  }
+                  value={customTotal}
+                  onChange={(event) => setCustomTotal(event.target.value)}
                   required
                 />
               </div>
@@ -343,144 +562,164 @@ function AdminQuoteEditor({
                 </div>
               </div>
             ) : null}
-            {questions?.map((question) => {
+          </div>
+
+          <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="grid gap-5 sm:grid-cols-2">
+              {questions?.map((question) => {
               const questionRules = pricingRules?.filter(
                 (rule) => rule.questionKey === question.key,
               );
               return (
-              <div key={question.key} className="space-y-2">
-                <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
-                  <Label htmlFor={`answer-${question.key}`}>
-                    {question.label}
-                    {question.required && pricingSource === "SERVICE" ? " *" : ""}
-                  </Label>
-                  {pricingSource === "SERVICE" && questionRules?.length ? (
-                    <div className="flex flex-wrap justify-end gap-1.5">
-                      {questionRules.map((rule) => (
-                        <span
-                          key={rule._id}
-                          className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-200"
-                          title={rule.description}
-                        >
-                          {pricingRuleLabel(rule)}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                {question.type === "BOOLEAN" ? (
-                  <NativeSelect
-                    id={`answer-${question.key}`}
-                    value={
-                      answers[question.key] === true
-                        ? "true"
-                        : answers[question.key] === false
-                          ? "false"
-                          : ""
-                    }
-                    onChange={(event) =>
-                      setAnswers((current) => {
-                        if (!event.target.value) {
-                          const next = { ...current };
-                          delete next[question.key];
-                          return next;
-                        }
-                        return {
-                          ...current,
-                          [question.key]: event.target.value === "true",
-                        };
-                      })
-                    }
-                    required={question.required && pricingSource === "SERVICE"}
-                  >
-                    <option value="">Select</option>
-                    <option value="true">Yes</option>
-                    <option value="false">No</option>
-                  </NativeSelect>
-                ) : question.type === "SELECT" ? (
-                  <NativeSelect
-                    id={`answer-${question.key}`}
-                    value={String(answers[question.key] ?? "")}
-                    onChange={(event) =>
-                      setAnswers((current) => ({
-                        ...current,
-                        [question.key]: event.target.value,
-                      }))
-                    }
-                    required={question.required && pricingSource === "SERVICE"}
-                  >
-                    <option value="">Select</option>
-                    {question.options?.map((option) => (
-                      <option key={option}>{option}</option>
-                    ))}
-                  </NativeSelect>
-                ) : question.type === "MULTI_SELECT" ? (
-                  <div className="grid gap-2 rounded-xl border border-slate-200 p-3">
-                    {question.options?.map((option) => {
-                      const currentAnswer = answers[question.key];
-                      const selected =
-                        Array.isArray(currentAnswer) &&
-                        currentAnswer.includes(option);
-                      return (
-                        <label
-                          key={option}
-                          className="flex items-center gap-2 text-sm"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={(event) =>
-                              setAnswers((current) => {
-                                const previous = Array.isArray(
-                                  current[question.key],
-                                )
-                                  ? (current[question.key] as string[])
-                                  : [];
-                                return {
-                                  ...current,
-                                  [question.key]: event.target.checked
-                                    ? [...previous, option]
-                                    : previous.filter(
-                                        (item) => item !== option,
-                                      ),
-                                };
-                              })
-                            }
-                          />
-                          {option}
-                        </label>
-                      );
-                    })}
+                <div key={question.key} className="space-y-2">
+                  <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
+                    <Label htmlFor={`answer-${question.key}`}>
+                      {question.label}
+                      {question.required && pricingSource === "SERVICE"
+                        ? " *"
+                        : ""}
+                    </Label>
+                    {pricingSource === "SERVICE" && questionRules?.length ? (
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {questionRules.map((rule) => (
+                          <span
+                            key={rule._id}
+                            className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-200"
+                            title={rule.description}
+                          >
+                            {pricingRuleLabel(rule)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                ) : (
-                  <Input
-                    id={`answer-${question.key}`}
-                    type={question.type === "NUMBER" ? "number" : "text"}
-                    min={question.type === "NUMBER" ? 0 : undefined}
-                    step={question.type === "NUMBER" ? 1 : undefined}
-                    value={inputValue(answers[question.key])}
-                    onChange={(event) =>
-                      setAnswers((current) => {
-                        if (!event.target.value) {
-                          const next = { ...current };
-                          delete next[question.key];
-                          return next;
-                        }
-                        return {
+                  {question.type === "BOOLEAN" ? (
+                    <NativeSelect
+                      id={`answer-${question.key}`}
+                      value={
+                        answers[question.key] === true
+                          ? "true"
+                          : answers[question.key] === false
+                            ? "false"
+                            : ""
+                      }
+                      onChange={(event) =>
+                        setAnswers((current) => {
+                          if (!event.target.value) {
+                            const next = { ...current };
+                            delete next[question.key];
+                            return next;
+                          }
+                          return {
+                            ...current,
+                            [question.key]: event.target.value === "true",
+                          };
+                        })
+                      }
+                      required={
+                        question.required && pricingSource === "SERVICE"
+                      }
+                    >
+                      <option value="">Select</option>
+                      <option value="true">Yes</option>
+                      <option value="false">No</option>
+                    </NativeSelect>
+                  ) : question.type === "SELECT" ? (
+                    <NativeSelect
+                      id={`answer-${question.key}`}
+                      value={String(answers[question.key] ?? "")}
+                      onChange={(event) =>
+                        setAnswers((current) => ({
                           ...current,
-                          [question.key]:
-                            question.type === "NUMBER"
-                              ? Number(event.target.value)
-                              : event.target.value,
-                        };
-                      })
-                    }
-                    required={question.required && pricingSource === "SERVICE"}
-                  />
-                )}
-              </div>
+                          [question.key]: event.target.value,
+                        }))
+                      }
+                      required={
+                        question.required && pricingSource === "SERVICE"
+                      }
+                    >
+                      <option value="">Select</option>
+                      {question.options?.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </NativeSelect>
+                  ) : question.type === "MULTI_SELECT" ? (
+                    <div className="grid gap-2 rounded-xl border border-slate-200 p-3">
+                      {question.options?.map((option) => {
+                        const currentAnswer = answers[question.key];
+                        const selected =
+                          Array.isArray(currentAnswer) &&
+                          currentAnswer.includes(option);
+                        return (
+                          <label
+                            key={option}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={(event) =>
+                                setAnswers((current) => {
+                                  const previous = Array.isArray(
+                                    current[question.key],
+                                  )
+                                    ? (current[question.key] as string[])
+                                    : [];
+                                  return {
+                                    ...current,
+                                    [question.key]: event.target.checked
+                                      ? [...previous, option]
+                                      : previous.filter(
+                                          (item) => item !== option,
+                                        ),
+                                  };
+                                })
+                              }
+                            />
+                            {option}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Input
+                      id={`answer-${question.key}`}
+                      type={question.type === "NUMBER" ? "number" : "text"}
+                      min={question.type === "NUMBER" ? 0 : undefined}
+                      step={question.type === "NUMBER" ? 1 : undefined}
+                      value={inputValue(answers[question.key])}
+                      onChange={(event) =>
+                        setAnswers((current) => {
+                          if (!event.target.value) {
+                            const next = { ...current };
+                            delete next[question.key];
+                            return next;
+                          }
+                          return {
+                            ...current,
+                            [question.key]:
+                              question.type === "NUMBER"
+                                ? Number(event.target.value)
+                                : event.target.value,
+                          };
+                        })
+                      }
+                      required={
+                        question.required && pricingSource === "SERVICE"
+                      }
+                    />
+                  )}
+                </div>
               );
-            })}
+              })}
+            </div>
+            <LivePriceSummary
+              serviceSelected={Boolean(serviceId)}
+              pricingSource={pricingSource}
+              preview={pricingPreview}
+              customTotalCents={customTotalCents}
+              servicePriceIsComplete={servicePriceIsComplete}
+            />
           </div>
         </section>
 

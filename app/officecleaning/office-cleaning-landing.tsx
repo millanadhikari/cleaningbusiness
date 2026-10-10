@@ -12,7 +12,7 @@ import {
 import { ServiceMenu } from "../../components/service-menu";
 import styles from "../endofleaseclean/page.module.css";
 
-const navLinks = [["Home", "/"], ["Services", "#included"], ["How it works", "#process"], ["Why WeDo", "#workplace-plan"], ["Service areas", "#service-areas"], ["Blog", "/blog"]] as const;
+const navLinks = [["Home", "/"], ["Services", "/#services"], ["Bond guarantee", "/#bond-guarantee"], ["Why WeDo", "/#why-wedo"], ["Service areas", "/#service-areas"], ["Blog", "/blog"]] as const;
 
 function Action({ light = false, onClick }: { light?: boolean; onClick?: () => void }) {
   return <Link href="/cleaning-cost-calculator" onClick={onClick} className={`action ${light ? "light" : ""}`}>Get a free quote <ArrowUpRight size={18} /></Link>;

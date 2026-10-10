@@ -12,6 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import {
+  BrainCircuit,
   CheckCircle2,
   Cloud,
   Database,
@@ -230,6 +231,7 @@ export function PlatformUsageOverview() {
   }
 
   const selectedEmail = emailRange === 'daily' ? overview.daily : overview.monthly;
+  const cloudflare = overview.cloudflare;
   const clerk = providerSnapshot?.clerk;
   const clerkUsed = clerk?.activeThisMonth ?? 0;
   const clerkLimit = clerk?.limit ?? 50_000;
@@ -269,6 +271,17 @@ export function PlatformUsageOverview() {
       href: 'https://resend.com/emails',
     },
     {
+      name: 'Cloudflare AI',
+      detail: `${cloudflare.estimatedNeurons.toFixed(1)} estimated neurons used today by this CRM`,
+      icon: BrainCircuit,
+      status: providerSnapshot?.cloudflareConfigured
+        ? ('configured' as const)
+        : providerSnapshot
+          ? ('attention' as const)
+          : ('manual' as const),
+      href: 'https://dash.cloudflare.com/?to=/:account/ai/workers-ai',
+    },
+    {
       name: 'Vercel',
       detail: 'Open Vercel for authoritative bandwidth and compute usage.',
       icon: Cloud,
@@ -300,7 +313,7 @@ export function PlatformUsageOverview() {
             Free-tier health at a glance.
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[#677a75]">
-            Live CRM email usage, an estimated Clerk count, and direct access to each provider’s authoritative dashboard.
+            Live CRM email and AI usage, an estimated Clerk count, and direct access to each provider’s authoritative dashboard.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -326,7 +339,7 @@ export function PlatformUsageOverview() {
         </div>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr_1.35fr]" aria-label="Usage diagrams">
+      <section className="grid gap-4 xl:grid-cols-2" aria-label="Usage diagrams">
         <Card className="gap-2 rounded-[22px] border-[#dce7e2] bg-white py-5 shadow-[0_8px_30px_rgba(20,47,54,0.05)]">
           <CardHeader className="gap-3 px-5">
             <div className="flex items-start justify-between gap-3">
@@ -364,6 +377,33 @@ export function PlatformUsageOverview() {
             <div className="grid grid-cols-2 gap-3 border-t border-[#e5ece9] pt-4 text-sm">
               <div><span className="block text-xs text-[#71817d]">Sent</span><strong className="mt-1 block text-lg text-[#21413d]">{selectedEmail.sent.toLocaleString()}</strong></div>
               <div><span className="block text-xs text-[#71817d]">Remaining</span><strong className="mt-1 block text-lg text-[#21413d]">{Math.max(0, selectedEmail.limit - selectedEmail.sent).toLocaleString()}</strong></div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="gap-2 rounded-[22px] border-[#dce7e2] bg-white py-5 shadow-[0_8px_30px_rgba(20,47,54,0.05)]">
+          <CardHeader className="px-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base text-[#263f3c]">Cloudflare Workers AI</CardTitle>
+                <CardDescription className="mt-1 text-xs leading-5">CRM-tracked daily free-tier estimate</CardDescription>
+              </div>
+              <BrainCircuit className="size-5 text-[#007c70]" />
+            </div>
+          </CardHeader>
+          <CardContent className="px-5">
+            <UsageRing
+              used={cloudflare.estimatedNeurons}
+              limit={cloudflare.limitNeurons}
+              label="estimated neurons used"
+            />
+            <div className="grid grid-cols-2 gap-3 border-t border-[#e5ece9] pt-4 text-sm">
+              <div><span className="block text-xs text-[#71817d]">Used today</span><strong className="mt-1 block text-lg text-[#21413d]">{cloudflare.estimatedNeurons.toFixed(1)}</strong><small className="text-[10px] text-[#71817d]">neurons</small></div>
+              <div><span className="block text-xs text-[#71817d]">Estimated remaining</span><strong className="mt-1 block text-lg text-[#21413d]">{Math.max(0, cloudflare.limitNeurons - cloudflare.estimatedNeurons).toFixed(1)}</strong><small className="text-[10px] text-[#71817d]">of {cloudflare.limitNeurons.toLocaleString()}</small></div>
+            </div>
+            <div className="mt-3 flex flex-wrap justify-between gap-2 rounded-xl bg-[#f3f7f5] px-3 py-2 text-[11px] text-[#657873]">
+              <span>{cloudflare.totalTokens.toLocaleString()} tokens</span>
+              <span>{cloudflare.requestCount.toLocaleString()} model calls</span>
             </div>
           </CardContent>
         </Card>
@@ -425,7 +465,7 @@ export function PlatformUsageOverview() {
           <CardTitle className="text-base text-[#263f3c]">Provider connections</CardTitle>
           <CardDescription className="text-xs leading-5">Configuration health and shortcuts to authoritative provider usage</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-0 px-0 sm:grid-cols-2 xl:grid-cols-5">
+        <CardContent className="grid gap-0 px-0 sm:grid-cols-2 xl:grid-cols-6">
           {services.map((service) => {
             const Icon = service.icon;
             return (
@@ -450,8 +490,8 @@ export function PlatformUsageOverview() {
       </Card>
 
       <div className="flex flex-col gap-1 px-1 text-[11px] leading-5 text-[#75847f] sm:flex-row sm:items-center sm:justify-between">
-        <span>Last refreshed {formatDate(lastUpdated)} · Resend figures include emails sent by this CRM.</span>
-        <span>Clerk is an estimate; Convex and Vercel dashboards remain authoritative.</span>
+        <span>Last refreshed {formatDate(lastUpdated)} · Daily AI allowance resets at 00:00 UTC.</span>
+        <span>Cloudflare AI is CRM-tracked and estimated; its dashboard remains authoritative for account-wide usage.</span>
       </div>
     </div>
   );

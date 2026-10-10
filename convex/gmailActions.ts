@@ -106,6 +106,23 @@ function senderAddress(value: string) {
   return (bracketed?.[1] ?? value).trim().toLowerCase();
 }
 
+function isClearlyAutomatedMessage(headers: Map<string, string>, labels: Set<string>, from: string) {
+  const address = senderAddress(from);
+  const localPart = address.split("@")[0] ?? "";
+  const autoSubmitted = headers.get("auto-submitted")?.trim().toLowerCase();
+  const precedence = headers.get("precedence")?.trim().toLowerCase();
+
+  return (
+    labels.has("CATEGORY_PROMOTIONS") ||
+    labels.has("CATEGORY_SOCIAL") ||
+    labels.has("CATEGORY_FORUMS") ||
+    Boolean(autoSubmitted && autoSubmitted !== "no") ||
+    ["bulk", "list", "junk"].includes(precedence ?? "") ||
+    headers.has("list-unsubscribe") ||
+    /(?:^|[-_.])(?:no-?reply|do-?not-?reply|notifications?)(?:$|[-_.])/i.test(localPart)
+  );
+}
+
 function isExpiredHistoryError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { code?: number; message?: string };
@@ -376,6 +393,7 @@ async function fetchAndStoreMessage(
   if (!from || senderAddress(from) === connectedEmail.trim().toLowerCase()) {
     return "ignored" as const;
   }
+  if (isClearlyAutomatedMessage(headers, labels, from)) return "ignored" as const;
   const to = headers.get("to")?.trim() || connectedEmail;
   const subject = headers.get("subject")?.trim() || "(No subject)";
   const rfcMessageId = headers.get("message-id")?.trim() || undefined;

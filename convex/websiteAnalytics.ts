@@ -6,6 +6,11 @@ const publicEventType = v.union(
   v.literal("QUOTE_STARTED"),
   v.literal("BOOKING_STARTED"),
   v.literal("PAYMENT_STARTED"),
+  v.literal("AI_CHAT_OPENED"),
+  v.literal("AI_CHAT_STARTED"),
+  v.literal("AI_ESTIMATE_STARTED"),
+  v.literal("AI_ESTIMATE_COMPLETED"),
+  v.literal("AI_HANDOFF_REQUESTED"),
 );
 
 function cleanText(value: string | undefined, maxLength: number) {

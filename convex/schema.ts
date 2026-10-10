@@ -88,10 +88,13 @@ export default defineSchema({
     bodyHtml: v.optional(v.string()),
     sentAt: v.number(),
     receivedAt: v.number(),
+    dismissedAt: v.optional(v.number()),
+    dismissedByUserId: v.optional(v.id("users")),
   })
     .index("by_gmail_message", ["gmailMessageId"])
     .index("by_gmail_thread", ["gmailThreadId"])
-    .index("by_received_at", ["receivedAt"]),
+    .index("by_received_at", ["receivedAt"])
+    .index("by_dismissed_received_at", ["dismissedAt", "receivedAt"]),
   adminInvitations: defineTable({
     email: v.string(),
     clerkInvitationId: v.string(),
@@ -195,6 +198,11 @@ export default defineSchema({
       v.literal("BOOKING_CREATED"),
       v.literal("PAYMENT_STARTED"),
       v.literal("PAYMENT_COMPLETED"),
+      v.literal("AI_CHAT_OPENED"),
+      v.literal("AI_CHAT_STARTED"),
+      v.literal("AI_ESTIMATE_STARTED"),
+      v.literal("AI_ESTIMATE_COMPLETED"),
+      v.literal("AI_HANDOFF_REQUESTED"),
     ),
     page: v.string(),
     metadata: v.optional(
@@ -209,6 +217,49 @@ export default defineSchema({
     .index("by_event_type", ["eventType"])
     .index("by_created_at", ["createdAt"])
     .index("by_session_and_created_at", ["sessionId", "createdAt"]),
+  chatSessions: defineTable({
+    sessionId: v.string(),
+    websiteSessionId: v.optional(v.string()),
+    customerId: v.optional(v.id("customers")),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    status: v.union(
+      v.literal("ACTIVE"),
+      v.literal("HANDED_OFF"),
+      v.literal("CLOSED"),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastMessageAt: v.number(),
+  })
+    .index("by_session_id", ["sessionId"])
+    .index("by_website_session", ["websiteSessionId"])
+    .index("by_customer", ["customerId"])
+    .index("by_last_message", ["lastMessageAt"]),
+  chatMessages: defineTable({
+    sessionId: v.string(),
+    role: v.union(
+      v.literal("USER"),
+      v.literal("ASSISTANT"),
+      v.literal("SYSTEM"),
+      v.literal("TOOL"),
+    ),
+    content: v.string(),
+    toolName: v.optional(v.string()),
+    toolCallId: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_session", ["sessionId", "createdAt"])
+    .index("by_created_at", ["createdAt"]),
+  aiUsageEvents: defineTable({
+    provider: v.literal("CLOUDFLARE"),
+    model: v.string(),
+    inputTokens: v.number(),
+    outputTokens: v.number(),
+    totalTokens: v.number(),
+    estimatedNeurons: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_provider_and_created_at", ["provider", "createdAt"]),
   serviceAreaSettings: defineTable({
     key: v.literal("DEFAULT"),
     centreName: v.string(),
@@ -548,6 +599,7 @@ export default defineSchema({
     type: v.union(
       v.literal("BOOKING_CONFIRMATION"),
       v.literal("QUOTE_REQUEST_RECEIVED"),
+      v.literal("QUOTE"),
       v.literal("QUOTE_PAYMENT_LINK"),
       v.literal("BOOKING_PAYMENT_LINK"),
       v.literal("INVOICE"),

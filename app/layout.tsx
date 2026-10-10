@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { GoogleAnalytics } from '@/components/analytics/google-analytics';
+import { PublicHashNavigation } from '@/components/public-hash-navigation';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -35,6 +36,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en-AU">
       <body className="antialiased">
+        <PublicHashNavigation />
         {content}
         {ga4MeasurementId && /^G-[A-Z0-9]+$/i.test(ga4MeasurementId) ? (
           <GoogleAnalytics measurementId={ga4MeasurementId} />

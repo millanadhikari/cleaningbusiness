@@ -25,6 +25,8 @@ import type * as chat from "../chat.js";
 import type * as chatData from "../chatData.js";
 import type * as cleanerPortal from "../cleanerPortal.js";
 import type * as cleaners from "../cleaners.js";
+import type * as crmAi from "../crmAi.js";
+import type * as crmAiData from "../crmAiData.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
@@ -84,6 +86,8 @@ declare const fullApi: ApiFromModules<{
   chatData: typeof chatData;
   cleanerPortal: typeof cleanerPortal;
   cleaners: typeof cleaners;
+  crmAi: typeof crmAi;
+  crmAiData: typeof crmAiData;
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;

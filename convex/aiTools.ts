@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalQuery } from "./_generated/server";
 import { calculateEstimateForService } from "./services";
 
@@ -11,7 +11,7 @@ const answerValue = v.union(
   v.array(v.string()),
 );
 
-async function activeService(ctx: QueryCtx, input: string) {
+export async function activeService(ctx: QueryCtx | MutationCtx, input: string) {
   const value = input.trim();
   const id = ctx.db.normalizeId("services", value);
   const byId = id ? await ctx.db.get(id) : null;

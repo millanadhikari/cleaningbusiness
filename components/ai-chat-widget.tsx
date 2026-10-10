@@ -1,13 +1,14 @@
 "use client";
 
 import { useAction, useMutation, useQuery } from "convex/react";
-import { Bot, MessageCircle, Plus, Send, X } from "lucide-react";
+import { Bot, Check, MessageCircle, Pencil, Plus, Send, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
 import { getWebsiteSessionId } from "@/lib/website-analytics";
 import styles from "./ai-chat-widget.module.css";
+import summaryStyles from "./ai-chat-summary.module.css";
 
 const STORAGE_KEY = "wdc_ai_chat_session";
 const quickActions = ["Get a quote", "Book a cleaning", "Ask a question", "Talk to a person"];
@@ -37,6 +38,7 @@ export function AiChatWidget() {
   const sendMessage = useAction(api.chat.sendMessage);
   const trackEvent = useMutation(api.websiteAnalytics.trackEvent);
   const messages = useQuery(api.chat.listMessages, sessionId ? { sessionId } : "skip");
+  const requestState = useQuery(api.chat.getRequestState, sessionId ? { sessionId } : "skip");
   const hidden = ["/admin", "/agency", "/cleaner", "/sign-in", "/accept-invitation", "/api"].some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
@@ -120,6 +122,25 @@ export function AiChatWidget() {
           <div className={styles.messages} ref={scrollRef} aria-live="polite">
             {!messages?.length ? <><p className={styles.welcome}>Hi! I can answer questions about our cleaning services and help calculate an estimate. What can I help with?</p><div className={styles.quick}>{quickActions.map((label) => <button key={label} type="button" onClick={() => void submit(label)}>{label}</button>)}</div></> : null}
             {messages?.map((message) => <div key={message.id} className={`${styles.bubble} ${message.role === "USER" ? styles.user : styles.assistant}`}>{message.content}<time className={styles.time}>{new Date(message.createdAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}</time></div>)}
+            {requestState ? (
+              <aside className={summaryStyles.card} aria-label={`${requestState.kind === "QUOTE" ? "Quote" : "Callback"} request summary`}>
+                <span className={summaryStyles.eyebrow}>Ready for confirmation</span>
+                <h3>{requestState.serviceName}</h3>
+                <dl>
+                  {requestState.details.map((detail) => <div key={detail.key}><dt>{detail.key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase())}</dt><dd>{detail.value}</dd></div>)}
+                  {requestState.preferredDate ? <div><dt>Preferred</dt><dd>{requestState.preferredDate}{requestState.preferredTime ? ` · ${requestState.preferredTime}` : ""}</dd></div> : null}
+                  {requestState.formattedEstimate ? <div className={summaryStyles.total}><dt>Estimated price</dt><dd>{requestState.formattedEstimate}</dd></div> : null}
+                  <div><dt>Customer</dt><dd>{requestState.customerName}</dd></div>
+                  <div><dt>Contact</dt><dd>{[requestState.phone, requestState.email].filter(Boolean).join(" · ")}</dd></div>
+                  <div><dt>Address</dt><dd>{requestState.address}</dd></div>
+                  {requestState.notes ? <div><dt>{requestState.kind === "CALLBACK" ? "Reason" : "Notes"}</dt><dd>{requestState.notes}</dd></div> : null}
+                </dl>
+                <div className={summaryStyles.actions}>
+                  <button type="button" disabled={sending} onClick={() => void submit("Confirm")}><Check />Confirm &amp; Submit</button>
+                  <button type="button" disabled={sending} onClick={() => { setInput("I need to change "); window.setTimeout(() => inputRef.current?.focus(), 0); }}><Pencil />Change details</button>
+                </div>
+              </aside>
+            ) : null}
             {sending ? <div className={`${styles.bubble} ${styles.assistant} ${styles.typing}`} aria-label="Assistant is typing"><i /><i /><i /></div> : null}
             {error ? <p className={styles.error}>{error} <button type="button" onClick={() => void submit(input)}>Retry</button></p> : null}
           </div>

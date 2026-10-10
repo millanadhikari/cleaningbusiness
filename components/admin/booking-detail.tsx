@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   Mail,
   MapPin,
+  MessageSquareWarning,
   Phone,
   Plus,
   Save,
@@ -111,6 +112,10 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
     api.bookings.get,
     isAuthenticated ? { bookingId } : "skip",
   );
+  const changeRequests = useQuery(
+    api.bookingChangeRequests.listForBooking,
+    isAuthenticated ? { bookingId } : "skip",
+  );
   const cleaners = useQuery(
     api.cleaners.listActive,
     isAuthenticated ? {} : "skip",
@@ -119,6 +124,7 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
   const addNote = useMutation(api.bookings.addBookingNote);
   const deleteNote = useMutation(api.bookings.deleteBookingNote);
   const updateDetails = useMutation(api.bookings.updateDetails);
+  const reviewChangeRequest = useMutation(api.bookingChangeRequests.review);
   const addPriceAdjustment = useMutation(api.bookings.addPriceAdjustment);
   const recordManualPayment = useMutation(api.bookings.recordManualPayment);
   const createBalanceCheckout = useAction(
@@ -140,6 +146,25 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
   const [isSendingPaymentLink, setIsSendingPaymentLink] = useState(false);
   const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
   const [isSendingInvoice, setIsSendingInvoice] = useState(false);
+  const [reviewingRequest, setReviewingRequest] = useState<Id<"bookingChangeRequests"> | null>(null);
+
+  async function handleRequestReview(
+    requestId: Id<"bookingChangeRequests">,
+    decision: "APPROVE" | "DECLINE",
+  ) {
+    setReviewingRequest(requestId);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await reviewChangeRequest({ requestId, decision });
+      if (result.status === "NEEDS_ATTENTION") setError(result.message);
+      else setMessage(result.message);
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message.replace(/^.*Uncaught Error:\s*/, "") : "Unable to review the request.");
+    } finally {
+      setReviewingRequest(null);
+    }
+  }
 
   async function handleUpdateDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -592,6 +617,54 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
       </Card>
 
       <EmailConversation bookingId={bookingId} />
+
+      <Card className={cardClass}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <MessageSquareWarning className="size-4 text-emerald-700" /> Change requests
+          </CardTitle>
+          <CardDescription>
+            Customer requests captured by AI chat. Approval revalidates the booking and availability before applying supported changes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {changeRequests === undefined ? (
+            <p className="text-sm text-slate-500">Loading change requests…</p>
+          ) : changeRequests.length === 0 ? (
+            <p className="text-sm text-slate-500">No booking change requests.</p>
+          ) : changeRequests.map((request) => {
+            const requested = Object.entries(request.requestedChanges).filter(([, value]) => value !== undefined && value !== "");
+            const actionable = request.status === "PENDING" || request.status === "NEEDS_ATTENTION";
+            return (
+              <div key={request._id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary">{label(request.type)}</Badge>
+                      <Badge className={request.status === "APPROVED" ? "bg-emerald-100 text-emerald-800" : request.status === "DECLINED" ? "bg-slate-200 text-slate-700" : request.status === "NEEDS_ATTENTION" ? "bg-amber-100 text-amber-900" : "bg-sky-100 text-sky-800"}>{label(request.status)}</Badge>
+                      <span className="text-xs font-semibold text-teal-700">AI chat</span>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">Submitted {date(request.createdAt, true)}</p>
+                  </div>
+                  {actionable ? (
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" disabled={reviewingRequest === request._id} onClick={() => void handleRequestReview(request._id, "DECLINE")}><X /> Decline</Button>
+                      <Button size="sm" disabled={reviewingRequest === request._id} onClick={() => void handleRequestReview(request._id, "APPROVE")}><Check /> Approve</Button>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                  <div><span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current</span><p className="mt-1">{date(request.currentSnapshot.scheduledDate)} · {time(request.currentSnapshot.scheduledTime)}</p></div>
+                  <div><span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Requested</span>{request.type === "CANCELLATION" ? <p className="mt-1 font-semibold text-red-700">Cancel booking</p> : requested.length ? requested.map(([key, value]) => <p className="mt-1" key={key}><strong>{label(key)}:</strong> {String(value)}</p>) : <p className="mt-1">No supported details supplied</p>}</div>
+                </div>
+                {request.reason ? <p className="mt-3 rounded-lg bg-white px-3 py-2 text-sm text-slate-600"><strong>Customer reason:</strong> {request.reason}</p> : null}
+                {request.adminReason ? <p className="mt-2 text-sm text-amber-800"><strong>Review note:</strong> {request.adminReason}</p> : null}
+                {request.type === "CANCELLATION" && booking.paymentStatus !== "UNPAID" && actionable ? <p className="mt-3 text-sm font-semibold text-amber-800">Payment/refund review is required; approval will not cancel automatically.</p> : null}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
 
       <div className={styles.columns}>
         <div className="space-y-5">

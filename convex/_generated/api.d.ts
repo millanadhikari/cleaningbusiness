@@ -11,10 +11,13 @@
 import type * as adminInvitations from "../adminInvitations.js";
 import type * as agencies from "../agencies.js";
 import type * as agencyPortal from "../agencyPortal.js";
+import type * as aiBookingTools from "../aiBookingTools.js";
 import type * as aiTools from "../aiTools.js";
+import type * as aiWriteTools from "../aiWriteTools.js";
 import type * as analytics from "../analytics.js";
 import type * as availability from "../availability.js";
 import type * as blogs from "../blogs.js";
+import type * as bookingChangeRequests from "../bookingChangeRequests.js";
 import type * as bookings from "../bookings.js";
 import type * as bootstrap from "../bootstrap.js";
 import type * as calendar from "../calendar.js";
@@ -67,10 +70,13 @@ declare const fullApi: ApiFromModules<{
   adminInvitations: typeof adminInvitations;
   agencies: typeof agencies;
   agencyPortal: typeof agencyPortal;
+  aiBookingTools: typeof aiBookingTools;
   aiTools: typeof aiTools;
+  aiWriteTools: typeof aiWriteTools;
   analytics: typeof analytics;
   availability: typeof availability;
   blogs: typeof blogs;
+  bookingChangeRequests: typeof bookingChangeRequests;
   bookings: typeof bookings;
   bootstrap: typeof bootstrap;
   calendar: typeof calendar;

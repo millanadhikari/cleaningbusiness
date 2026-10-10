@@ -53,30 +53,32 @@ async function bookingsForDates(ctx: QueryCtx | MutationCtx, fromDate: string, t
   ).collect();
 }
 
-export const listPublic = query({
-  args: { fromDate: v.string(), toDate: v.string() },
-  handler: async (ctx, args) => {
-    validateDate(args.fromDate);
-    validateDate(args.toDate);
+export async function listPublicSlots(ctx: QueryCtx | MutationCtx, requestedFromDate: string, toDate: string) {
+    validateDate(requestedFromDate);
+    validateDate(toDate);
     const firstAvailableDate = addDays(currentSydneyDate(), 1);
-    const fromDate = args.fromDate > firstAvailableDate ? args.fromDate : firstAvailableDate;
-    if (args.toDate < fromDate) return [];
+    const fromDate = requestedFromDate > firstAvailableDate ? requestedFromDate : firstAvailableDate;
+    if (toDate < fromDate) return [];
     const [blocks, bookings] = await Promise.all([
       ctx.db.query("publicAvailabilityBlocks").withIndex("by_date", (index) =>
-        index.gte("date", fromDate).lte("date", args.toDate),
+        index.gte("date", fromDate).lte("date", toDate),
       ).collect(),
-      bookingsForDates(ctx, fromDate, args.toDate),
+      bookingsForDates(ctx, fromDate, toDate),
     ]);
     const occupied = new Set(bookings.filter((booking) => booking.status !== "CANCELLED").map((booking) => `${booking.scheduledDate}|${booking.scheduledTime}`));
     const blockedDays = new Set(blocks.filter((block) => !block.time).map((block) => block.date));
     const blockedTimes = new Set(blocks.filter((block) => block.time).map((block) => `${block.date}|${block.time}`));
-    return datesBetween(fromDate, args.toDate).flatMap((date) => {
+    return datesBetween(fromDate, toDate).flatMap((date) => {
       if (blockedDays.has(date)) return [];
       return DEFAULT_BOOKING_TIMES
         .filter((time) => !blockedTimes.has(`${date}|${time}`) && !occupied.has(`${date}|${time}`))
         .map((time) => ({ date, time, capacity: 1, remaining: 1 }));
     });
-  },
+}
+
+export const listPublic = query({
+  args: { fromDate: v.string(), toDate: v.string() },
+  handler: (ctx, args) => listPublicSlots(ctx, args.fromDate, args.toDate),
 });
 
 export const createBlock = mutation({
@@ -111,7 +113,12 @@ export const removeBlock = mutation({
   },
 });
 
-export async function ensurePublicSlotAvailable(ctx: MutationCtx, date: string, time: string) {
+export async function ensurePublicSlotAvailable(
+  ctx: MutationCtx,
+  date: string,
+  time: string,
+  excludeBookingId?: string,
+) {
   validateDate(date);
   validateTime(time);
   if (date <= currentSydneyDate()) throw new Error("Appointments are available from tomorrow.");
@@ -120,7 +127,7 @@ export async function ensurePublicSlotAvailable(ctx: MutationCtx, date: string, 
     throw new Error("That appointment time is unavailable. Please choose another.");
   }
   const bookings = await bookingsForDates(ctx, date, date);
-  if (bookings.some((booking) => booking.status !== "CANCELLED" && booking.scheduledTime === time)) {
+  if (bookings.some((booking) => booking._id !== excludeBookingId && booking.status !== "CANCELLED" && booking.scheduledTime === time)) {
     throw new Error("That appointment time has just been booked. Please choose another.");
   }
 }

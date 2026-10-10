@@ -203,7 +203,12 @@ export function QuoteRequestsManager() {
                         {quote.suburb}
                       </small>
                     </TableCell>
-                    <TableCell>{requestLabel(quote.requestType)}</TableCell>
+                    <TableCell>
+                      {requestLabel(quote.requestType)}
+                      {quote.source === "AI_CHAT" ? (
+                        <small className="mt-1 block font-semibold text-teal-700">AI chat</small>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap font-medium">
                       {formatEstimate(quote)}
                     </TableCell>

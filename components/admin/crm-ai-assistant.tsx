@@ -2,7 +2,7 @@
 
 import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { Bot, Check, ChevronDown, LoaderCircle, MessageSquarePlus, Send, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -21,6 +21,126 @@ const suggestions: Record<ContextType, string[]> = {
   EMAIL_THREAD: ["Summarise this email thread", "Draft a reply", "Identify the customer's request"],
   ANALYTICS: ["Summarise this week", "Show conversion performance", "What changed operationally?"],
 };
+
+function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
+  return text.split("**").flatMap((boldPart, boldIndex) =>
+    boldPart.split(/(`[^`]+`)/g).filter(Boolean).map((part, codeIndex) => {
+      const key = `${keyPrefix}-${boldIndex}-${codeIndex}`;
+      const rendered = part.startsWith("`") && part.endsWith("`")
+        ? <code className="rounded bg-[#edf4f1] px-1 py-0.5 font-mono text-[11px] text-[#28524b]">{part.slice(1, -1)}</code>
+        : part;
+      return boldIndex % 2 === 1
+        ? <strong key={key} className="font-semibold text-[#173f3b]">{rendered}</strong>
+        : <span key={key}>{rendered}</span>;
+    }),
+  );
+}
+
+function isTableRow(line: string) {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.split("|").length >= 4;
+}
+
+function isTableDivider(line: string) {
+  return line.replace(/[|:\s-]/g, "").length === 0;
+}
+
+function tableCells(line: string) {
+  return line.trim().replace(/^\||\|$/g, "").split("|").map(cell => cell.trim());
+}
+
+function MessageContent({ content, plain = false }: { content: string; plain?: boolean }) {
+  if (plain) return <div>{content}</div>;
+
+  const normalised = content
+    .replace(/\r\n?/g, "\n")
+    .replace(/\s+-\s+(?=\*\*[^*]+\*\*:)/g, "\n- ")
+    .trim();
+  const lines = normalised.split("\n");
+  const blocks: ReactNode[] = [];
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index].trim();
+    if (!line) { index += 1; continue; }
+
+    if (/^---+$/.test(line)) {
+      blocks.push(<div key={`rule-${index}`} className="my-2 h-px bg-[#dfe9e5]" />);
+      index += 1;
+      continue;
+    }
+
+    if (isTableRow(line)) {
+      const rows: string[][] = [];
+      let cursor = index;
+      while (cursor < lines.length && isTableRow(lines[cursor])) {
+        if (!isTableDivider(lines[cursor])) rows.push(tableCells(lines[cursor]));
+        cursor += 1;
+      }
+      const hasHeader = index + 1 < lines.length && isTableDivider(lines[index + 1]);
+      blocks.push(
+        <div key={`table-${index}`} className="my-2 overflow-x-auto rounded-lg border border-[#dbe7e3]">
+          <table className="w-full border-collapse text-left text-[11px] leading-4">
+            {hasHeader && rows[0] ? (
+              <thead className="bg-[#edf6f2] text-[#28524b]">
+                <tr>{rows[0].map((cell, cellIndex) => <th key={cellIndex} className="border-b border-[#d5e4df] px-2 py-1.5 font-semibold">{renderInlineMarkdown(cell, `th-${index}-${cellIndex}`)}</th>)}</tr>
+              </thead>
+            ) : null}
+            <tbody className="divide-y divide-[#e8efec]">
+              {rows.slice(hasHeader ? 1 : 0).map((row, rowIndex) => (
+                <tr key={rowIndex} className="even:bg-[#f8faf9]">
+                  {row.map((cell, cellIndex) => <td key={cellIndex} className="px-2 py-1.5 align-top text-[#405a55]">{renderInlineMarkdown(cell, `td-${index}-${rowIndex}-${cellIndex}`)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      index = cursor;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      let cursor = index;
+      while (cursor < lines.length && /^[-*]\s+/.test(lines[cursor].trim())) {
+        items.push(lines[cursor].trim().replace(/^[-*]\s+/, ""));
+        cursor += 1;
+      }
+      blocks.push(
+        <ul key={`list-${index}`} className="my-1.5 space-y-1 pl-4 marker:text-[#168675]">
+          {items.map((item, itemIndex) => <li key={itemIndex} className="list-disc pl-0.5">{renderInlineMarkdown(item, `li-${index}-${itemIndex}`)}</li>)}
+        </ul>,
+      );
+      index = cursor;
+      continue;
+    }
+
+    if (/^\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      let cursor = index;
+      while (cursor < lines.length && /^\d+[.)]\s+/.test(lines[cursor].trim())) {
+        items.push(lines[cursor].trim().replace(/^\d+[.)]\s+/, ""));
+        cursor += 1;
+      }
+      blocks.push(
+        <ol key={`ordered-${index}`} className="my-1.5 space-y-1 pl-4 marker:font-semibold marker:text-[#168675]">
+          {items.map((item, itemIndex) => <li key={itemIndex} className="list-decimal pl-0.5">{renderInlineMarkdown(item, `ordered-${index}-${itemIndex}`)}</li>)}
+        </ol>,
+      );
+      index = cursor;
+      continue;
+    }
+
+    if (/^#{1,3}\s+/.test(line)) {
+      blocks.push(<div key={`heading-${index}`} className="mt-2 font-semibold text-[#173f3b]">{renderInlineMarkdown(line.replace(/^#{1,3}\s+/, ""), `heading-${index}`)}</div>);
+    } else {
+      blocks.push(<div key={`text-${index}`} className="my-1">{renderInlineMarkdown(line, `text-${index}`)}</div>);
+    }
+    index += 1;
+  }
+
+  return <div className="space-y-1">{blocks}</div>;
+}
 
 export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: Props) {
   const { isAuthenticated } = useConvexAuth();
@@ -62,7 +182,7 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 right-5 z-40 flex h-11 items-center gap-2 rounded-xl bg-[#076c63] px-4 text-[13px] font-semibold tracking-[-0.01em] text-[#f7fffc] shadow-[0_10px_28px_rgba(4,86,79,.26)] transition hover:-translate-y-0.5 hover:bg-[#055b54] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#51b8aa] focus-visible:ring-offset-2"
+        className="fixed bottom-5 right-5 z-40 flex h-10 items-center gap-2 rounded-xl bg-[#076c63] px-3.5 text-[12px] font-semibold tracking-[-0.01em] !text-white shadow-[0_10px_28px_rgba(4,86,79,.26)] transition hover:-translate-y-0.5 hover:bg-[#055b54] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#51b8aa] focus-visible:ring-offset-2 [&_svg]:!text-white"
         aria-label="Open WeDo AI"
       >
         <Sparkles className="size-4 text-white" />
@@ -76,31 +196,31 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
       ) : null}
       <aside
         className={cn(
-          "fixed inset-y-0 right-0 z-[60] flex w-full max-w-[440px] flex-col border-l border-[#d9e4e0] bg-[#f6f8f7] font-sans shadow-[-16px_0_45px_rgba(18,48,44,.14)] transition-transform duration-200",
+          "fixed inset-y-0 right-0 z-[60] flex w-full max-w-[420px] flex-col border-l border-[#d9e4e0] bg-[#f6f8f7] font-sans shadow-[-16px_0_45px_rgba(18,48,44,.14)] transition-transform duration-200",
           open ? "translate-x-0" : "translate-x-full",
         )}
         aria-hidden={!open}
       >
-        <header className="bg-[#075f58] px-5 py-4 text-[#f7fffc]">
-          <div className="flex items-center gap-3">
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/12 text-white ring-1 ring-white/15">
-              <Bot className="size-[18px]" />
+        <header className="bg-[#075f58] px-4 py-2.5 text-white">
+          <div className="flex items-center gap-2.5">
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-white/12 text-white ring-1 ring-white/15">
+              <Bot className="size-4 text-white" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h2 className="text-[15px] font-semibold leading-5 tracking-[-0.01em] text-white">WeDo AI</h2>
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#e5f4f0] ring-1 ring-white/15">
+                <div role="heading" aria-level={2} className="text-[14px] font-semibold leading-4 tracking-[-0.01em] !text-white">WeDo AI</div>
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] !text-white ring-1 ring-white/20">
                   <span className="size-1.5 rounded-full bg-[#8de0ca]" /> Internal
                 </span>
               </div>
-              <p className="mt-0.5 text-[11px] leading-4 text-[#d8ebe7]">
+              <div className="mt-0.5 text-[10px] leading-3.5 !text-[#e4f2ef]">
                 CRM assistant · {role === "SUPER_ADMIN" ? "Super Admin" : "Admin"}
-              </p>
+              </div>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="grid size-8 place-items-center rounded-lg text-[#e6f3f0] transition hover:bg-white/10 hover:text-white"
+              className="grid size-7 place-items-center rounded-lg !text-white transition hover:bg-white/15 [&_svg]:!text-white"
               aria-label="Close assistant"
             >
               <X className="size-4" />
@@ -108,11 +228,11 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
           </div>
         </header>
 
-        <div className="border-b border-[#dde7e3] bg-white px-4 py-3">
+        <div className="border-b border-[#dde7e3] bg-white px-3 py-2">
           <div className="flex gap-2">
             <button
               type="button"
-              className="flex h-9 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-[#d9e4e0] bg-white px-3 text-[12px] font-medium text-[#354e4a] transition hover:border-[#a9c8c1] hover:bg-[#f8fbfa]"
+              className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-[#b8d2cc] bg-white px-2.5 text-[11px] font-semibold !text-[#24443f] transition hover:border-[#78aa9f] hover:bg-[#f1f8f5]"
               onClick={() => setShowHistory(value => !value)}
             >
               <span className="truncate">
@@ -123,7 +243,7 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
             <button
               type="button"
               onClick={newConversation}
-              className="flex h-9 items-center gap-1.5 rounded-lg border border-[#d9e4e0] bg-white px-3 text-[12px] font-semibold text-[#176b62] transition hover:border-[#a9c8c1] hover:bg-[#f1f8f5]"
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-[#8cb8af] bg-white px-2.5 text-[11px] font-semibold !text-[#075f58] transition hover:border-[#076c63] hover:bg-[#076c63] hover:!text-white [&_svg]:text-current"
             >
               <MessageSquarePlus className="size-3.5" /> New
             </button>
@@ -145,29 +265,29 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
                     {new Date(row.lastMessageAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short", timeZone: "Australia/Sydney" })}
                   </span>
                 </button>
-              )) : <p className="p-3 text-[12px] text-[#71817d]">No previous conversations.</p>}
+              )) : <div className="p-3 text-[12px] text-[#71817d]">No previous conversations.</div>}
             </div>
           ) : null}
         </div>
 
-        <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3.5 py-3">
           {!messages?.length ? (
             <section className="rounded-2xl border border-[#dce8e4] bg-white p-4 shadow-[0_4px_14px_rgba(22,59,54,.04)]">
               <div className="flex items-center gap-2 text-[#176b62]">
                 <Sparkles className="size-3.5" />
-                <p className="text-[11px] font-bold uppercase tracking-[0.09em]">Suggested questions</p>
+                <div className="text-[11px] font-bold uppercase tracking-[0.09em]">Suggested questions</div>
               </div>
-              <p className="mt-2 text-[13px] font-semibold leading-5 text-[#253f3b]">What would you like to know?</p>
-              <p className="mt-1 text-[12px] leading-[1.55] text-[#687b77]">
+              <div className="mt-2 text-[13px] font-semibold leading-5 text-[#253f3b]">What would you like to know?</div>
+              <div className="mt-1 text-[12px] leading-[1.55] text-[#687b77]">
                 Search CRM records, summarise operations, or prepare a customer reply.
-              </p>
+              </div>
               <div className="mt-3 grid gap-2">
                 {quickPrompts.map(prompt => (
                   <button
                     key={prompt}
                     type="button"
                     onClick={() => submit(prompt)}
-                    className="rounded-xl border border-[#dce7e3] bg-[#f8faf9] px-3 py-2.5 text-left text-[12px] font-medium leading-[1.45] text-[#36514c] transition hover:border-[#92bdb4] hover:bg-[#edf6f2] hover:text-[#0c625a]"
+                    className="rounded-xl border border-[#a8c9c1] bg-white px-3 py-2.5 text-left text-[12px] font-semibold leading-[1.45] !text-[#24443f] transition hover:border-[#076c63] hover:bg-[#076c63] hover:!text-white"
                   >
                     {prompt}
                   </button>
@@ -186,12 +306,12 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
                 className={cn(
                   "max-w-[84%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-[1.55] whitespace-pre-wrap shadow-sm",
                   row.role === "USER"
-                    ? "rounded-br-md bg-[#076c63] text-[#f7fffc]"
+                    ? "rounded-br-md bg-[#076c63] !text-white [&_*]:!text-white"
                     : "rounded-bl-md border border-[#dde6e3] bg-white text-[#2f4541]",
                 )}
               >
-                <p>{row.content}</p>
-                <time className={cn("mt-1.5 block text-[9px] font-medium", row.role === "USER" ? "text-white/70" : "text-[#899793]")}>
+                <MessageContent content={row.content} plain={row.role === "USER"} />
+                <time className={cn("mt-1.5 block text-[9px] font-medium", row.role === "USER" ? "!text-[#dcefeb]" : "text-[#899793]")}>
                   {new Date(row.createdAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", timeZone: "Australia/Sydney" })}
                 </time>
               </div>
@@ -204,42 +324,42 @@ export function CrmAiAssistant({ contextType = "DASHBOARD", contextId, role }: P
           ) : null}
         </div>
 
-        <div className="border-t border-[#dce6e2] bg-white p-3.5">
+        <div className="border-t border-[#dce6e2] bg-white p-2.5">
           {activeSessionId && sessions?.find(row => row._id === activeSessionId)?.pendingAction ? (
-            <div className="mb-3 rounded-xl border border-[#efd69b] bg-[#fff9e9] p-3">
-              <p className="text-[12px] font-semibold text-[#5d4718]">Internal note awaiting confirmation</p>
-              <p className="mt-1 line-clamp-3 text-[11px] leading-[1.5] text-[#75602d]">
+            <div className="mb-2 rounded-xl border border-[#efd69b] bg-[#fff9e9] p-2.5">
+              <div className="text-[12px] font-semibold text-[#5d4718]">Internal note awaiting confirmation</div>
+              <div className="mt-1 line-clamp-3 text-[11px] leading-[1.5] text-[#75602d]">
                 {sessions.find(row => row._id === activeSessionId)?.pendingAction?.body}
-              </p>
+              </div>
               <div className="mt-2.5 flex gap-2">
-                <Button size="sm" onClick={() => submit("Confirm")} disabled={sending} className="h-8 bg-[#076c63] px-3 text-[11px] font-semibold text-white hover:bg-[#055b54]">
+                <Button size="sm" onClick={() => submit("Confirm")} disabled={sending} className="h-7 bg-[#076c63] px-2.5 text-[10px] font-semibold !text-white hover:bg-[#055b54] [&_svg]:!text-white">
                   <Check className="size-3.5" /> Confirm
                 </Button>
-                <Button size="sm" variant="outline" onClick={cancelAction} className="h-8 px-3 text-[11px]">Cancel</Button>
+                <Button size="sm" variant="outline" onClick={cancelAction} className="h-7 border-[#b8d2cc] px-2.5 text-[10px] !text-[#24443f]">Cancel</Button>
               </div>
             </div>
           ) : null}
-          <form onSubmit={onSubmit} className="flex items-end gap-2 rounded-xl border border-[#d7e2de] bg-[#f8faf9] p-1.5 focus-within:border-[#76aa9f] focus-within:ring-2 focus-within:ring-[#76aa9f]/15">
+          <form onSubmit={onSubmit} className="flex items-end gap-1.5 rounded-xl border border-[#9ebfb8] bg-white p-1 focus-within:border-[#076c63] focus-within:ring-2 focus-within:ring-[#76aa9f]/15">
             <Textarea
               value={message}
               onChange={event => setMessage(event.target.value)}
               onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(message); } }}
-              rows={2}
+              rows={1}
               maxLength={2000}
               placeholder="Ask about bookings, customers, quotes or email…"
-              className="min-h-11 resize-none border-0 bg-transparent px-2 py-2 text-[13px] leading-5 text-[#2e4541] shadow-none placeholder:text-[#8a9995] focus-visible:ring-0"
+              className="min-h-9 max-h-24 resize-none border-0 bg-transparent px-2 py-1.5 text-[12px] leading-5 !text-[#203d38] shadow-none placeholder:!text-[#667b76] focus-visible:ring-0"
             />
             <Button
               type="submit"
               size="icon"
               disabled={sending || !message.trim()}
-              className="size-9 shrink-0 rounded-lg bg-[#076c63] text-white shadow-none hover:bg-[#055b54] disabled:bg-[#c8d7d3] disabled:text-white"
+              className="size-8 shrink-0 rounded-lg bg-[#076c63] !text-white shadow-none hover:bg-[#055b54] disabled:bg-[#c8d7d3] disabled:!text-white [&_svg]:!text-white"
               aria-label="Send message"
             >
               <Send className="size-4" />
             </Button>
           </form>
-          <p className="mt-2 text-center text-[9px] leading-4 text-[#8a9894]">Verify important details before taking action.</p>
+          <div className="mt-1 text-center text-[8px] leading-3 text-[#71827e]">Verify important details before taking action.</div>
         </div>
       </aside>
     </>

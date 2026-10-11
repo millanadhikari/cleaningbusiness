@@ -30,6 +30,7 @@ import type * as crmAiData from "../crmAiData.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as emailAi from "../emailAi.js";
 import type * as emailDelivery from "../emailDelivery.js";
 import type * as emailTemplates from "../emailTemplates.js";
 import type * as emails from "../emails.js";
@@ -91,6 +92,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  emailAi: typeof emailAi;
   emailDelivery: typeof emailDelivery;
   emailTemplates: typeof emailTemplates;
   emails: typeof emails;

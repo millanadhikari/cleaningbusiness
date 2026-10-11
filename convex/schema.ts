@@ -49,6 +49,13 @@ export default defineSchema({
       v.literal("CLOSED"),
     ),
     unreadCount: v.optional(v.number()),
+    aiSummary: v.optional(v.string()),
+    aiSummaryUpdatedAt: v.optional(v.number()),
+    latestIntent: v.optional(v.string()),
+    latestPriority: v.optional(v.union(v.literal("URGENT"), v.literal("HIGH"), v.literal("NORMAL"), v.literal("LOW"))),
+    latestSuggestedAction: v.optional(v.string()),
+    needsAttention: v.optional(v.boolean()),
+    waitingSince: v.optional(v.number()),
     lastMessageAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -56,7 +63,12 @@ export default defineSchema({
     .index("by_quote", ["quoteId"])
     .index("by_booking", ["bookingId"])
     .index("by_customer", ["customerId"])
-    .index("by_gmail_thread", ["gmailThreadId"]),
+    .index("by_gmail_thread", ["gmailThreadId"])
+    .index("by_last_message", ["lastMessageAt"])
+    .index("by_status_and_last_message", ["status", "lastMessageAt"])
+    .index("by_attention_and_last_message", ["needsAttention", "lastMessageAt"])
+    .index("by_priority_and_last_message", ["latestPriority", "lastMessageAt"])
+    .index("by_intent_and_last_message", ["latestIntent", "lastMessageAt"]),
   emailMessages: defineTable({
     threadId: v.id("emailThreads"),
     gmailMessageId: v.optional(v.string()),
@@ -74,7 +86,78 @@ export default defineSchema({
   })
     .index("by_thread", ["threadId"])
     .index("by_gmail_message", ["gmailMessageId"])
-    .index("by_rfc_message", ["rfcMessageId"]),
+    .index("by_rfc_message", ["rfcMessageId"])
+    .index("by_direction_and_created_at", ["direction", "createdAt"]),
+  emailAiAnalysis: defineTable({
+    emailMessageId: v.id("emailMessages"),
+    emailThreadId: v.id("emailThreads"),
+    customerId: v.optional(v.id("customers")),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    primaryIntent: v.string(),
+    secondaryIntents: v.optional(v.array(v.string())),
+    priority: v.union(v.literal("URGENT"), v.literal("HIGH"), v.literal("NORMAL"), v.literal("LOW")),
+    sentiment: v.optional(v.union(v.literal("POSITIVE"), v.literal("NEUTRAL"), v.literal("NEGATIVE"))),
+    requiresResponse: v.boolean(),
+    suggestedAction: v.optional(v.string()),
+    summary: v.string(),
+    extractedRequestedDate: v.optional(v.string()),
+    extractedRequestedTime: v.optional(v.string()),
+    extractedReason: v.optional(v.string()),
+    confidence: v.optional(v.number()),
+    status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("FAILED"), v.literal("REVIEWED")),
+    provider: v.optional(v.string()),
+    model: v.optional(v.string()),
+    failureCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_message", ["emailMessageId"])
+    .index("by_thread", ["emailThreadId", "createdAt"])
+    .index("by_priority", ["priority", "createdAt"])
+    .index("by_status", ["status", "createdAt"])
+    .index("by_booking", ["bookingId", "createdAt"])
+    .index("by_quote", ["quoteId", "createdAt"]),
+  crmFollowUps: defineTable({
+    type: v.union(v.literal("EMAIL_RESPONSE"), v.literal("CALLBACK"), v.literal("COMPLAINT"), v.literal("QUOTE"), v.literal("BOOKING_CHANGE"), v.literal("OTHER")),
+    customerId: v.optional(v.id("customers")),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    emailThreadId: v.optional(v.id("emailThreads")),
+    assignedToUserId: v.optional(v.id("users")),
+    createdByUserId: v.id("users"),
+    source: v.union(v.literal("MANUAL"), v.literal("CRM_AI")),
+    title: v.string(),
+    notes: v.optional(v.string()),
+    dueAt: v.number(),
+    status: v.union(v.literal("OPEN"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    idempotencyKey: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_status_and_due", ["status", "dueAt"])
+    .index("by_thread_and_status", ["emailThreadId", "status"])
+    .index("by_booking_and_status", ["bookingId", "status"])
+    .index("by_idempotency_key", ["idempotencyKey"]),
+  emailAiAuditLogs: defineTable({
+    emailThreadId: v.optional(v.id("emailThreads")),
+    emailMessageId: v.optional(v.id("emailMessages")),
+    userId: v.optional(v.id("users")),
+    eventType: v.union(
+      v.literal("AI_CLASSIFICATION_COMPLETED"),
+      v.literal("AI_CLASSIFICATION_FAILED"),
+      v.literal("AI_PRIORITY_OVERRIDDEN"),
+      v.literal("AI_DRAFT_CREATED"),
+      v.literal("FOLLOW_UP_CREATED"),
+      v.literal("CHANGE_REQUEST_CREATED"),
+      v.literal("CANCELLATION_REQUEST_CREATED"),
+      v.literal("INSIGHT_REVIEWED"),
+    ),
+    detail: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_thread_and_created_at", ["emailThreadId", "createdAt"])
+    .index("by_message_and_created_at", ["emailMessageId", "createdAt"]),
   unmatchedEmailMessages: defineTable({
     gmailMessageId: v.string(),
     gmailThreadId: v.string(),
@@ -335,10 +418,16 @@ export default defineSchema({
     currentContextId: v.optional(v.string()),
     pendingAction: v.optional(
       v.object({
-        toolName: v.literal("addInternalNote"),
-        entityType: v.literal("BOOKING"),
+        toolName: v.union(v.literal("addInternalNote"), v.literal("createEmailFollowUp"), v.literal("createBookingChangeRequest"), v.literal("createCancellationRequest")),
+        entityType: v.union(v.literal("BOOKING"), v.literal("EMAIL_THREAD")),
         entityId: v.string(),
-        body: v.string(),
+        body: v.optional(v.string()),
+        title: v.optional(v.string()),
+        dueAt: v.optional(v.number()),
+        requestedDate: v.optional(v.string()),
+        requestedTime: v.optional(v.string()),
+        reason: v.optional(v.string()),
+        idempotencyKey: v.optional(v.string()),
         preparedAt: v.number(),
       }),
     ),
@@ -368,6 +457,9 @@ export default defineSchema({
       v.literal("CRM_AI_TOOL_USED"),
       v.literal("CRM_AI_DRAFT_EMAIL_CREATED"),
       v.literal("CRM_AI_NOTE_CREATED"),
+      v.literal("CRM_AI_FOLLOW_UP_CREATED"),
+      v.literal("CRM_AI_CHANGE_REQUEST_CREATED"),
+      v.literal("CRM_AI_CANCELLATION_REQUEST_CREATED"),
     ),
     entityType: v.optional(v.string()),
     entityId: v.optional(v.string()),
@@ -667,7 +759,7 @@ export default defineSchema({
     bookingId: v.id("bookings"),
     customerId: v.id("customers"),
     chatSessionId: v.optional(v.id("chatSessions")),
-    source: v.literal("AI_CHAT"),
+    source: v.union(v.literal("AI_CHAT"), v.literal("CRM_AI")),
     type: v.union(
       v.literal("RESCHEDULE"),
       v.literal("DETAILS_CHANGE"),

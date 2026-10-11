@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
@@ -108,6 +109,13 @@ export const getConversation = query({
           .order("asc")
           .take(200)
       : [];
+    const latestAnalysis = thread
+      ? await ctx.db
+          .query("emailAiAnalysis")
+          .withIndex("by_thread", (index) => index.eq("emailThreadId", thread!._id))
+          .order("desc")
+          .first()
+      : null;
     const senders = new Map<string, string>();
     await Promise.all(
       messages.map(async (message) => {
@@ -125,11 +133,33 @@ export const getConversation = query({
       thread: thread
         ? {
             _id: thread._id,
+            bookingId: thread.bookingId,
+            quoteId: thread.quoteId,
             subject: thread.subject,
             status: thread.status,
             activeContext: thread.activeContext,
             lastMessageAt: thread.lastMessageAt,
             unreadCount: thread.unreadCount ?? 0,
+            aiSummary: thread.aiSummary,
+            latestIntent: thread.latestIntent,
+            latestPriority: thread.latestPriority,
+            latestSuggestedAction: thread.latestSuggestedAction,
+            needsAttention: thread.needsAttention ?? false,
+            waitingSince: thread.waitingSince,
+            analysis: latestAnalysis ? {
+              _id: latestAnalysis._id,
+              status: latestAnalysis.status,
+              primaryIntent: latestAnalysis.primaryIntent,
+              secondaryIntents: latestAnalysis.secondaryIntents,
+              priority: latestAnalysis.priority,
+              requiresResponse: latestAnalysis.requiresResponse,
+              suggestedAction: latestAnalysis.suggestedAction,
+              summary: latestAnalysis.summary,
+              extractedRequestedDate: latestAnalysis.extractedRequestedDate,
+              extractedRequestedTime: latestAnalysis.extractedRequestedTime,
+              extractedReason: latestAnalysis.extractedReason,
+              confidence: latestAnalysis.confidence,
+            } : null,
             messages: messages.map((message) => ({
               _id: message._id,
               direction: message.direction,
@@ -385,6 +415,8 @@ export const recordSentMessage = internalMutation({
         gmailThreadId: args.gmailThreadId,
         subject: args.subject,
         status: "WAITING_CUSTOMER",
+        needsAttention: false,
+        waitingSince: now,
         unreadCount: 0,
         lastMessageAt: args.sentAt,
         createdAt: now,
@@ -397,6 +429,8 @@ export const recordSentMessage = internalMutation({
         activeContext: args.bookingId ? "BOOKING" : thread.activeContext,
         gmailThreadId: args.gmailThreadId,
         status: "WAITING_CUSTOMER",
+        needsAttention: false,
+        waitingSince: now,
         lastMessageAt: args.sentAt,
         updatedAt: now,
       });
@@ -658,7 +692,7 @@ export const storeInboundMessage = internalMutation({
     }
 
     const now = Date.now();
-    await ctx.db.insert("emailMessages", {
+    const inboundMessageId = await ctx.db.insert("emailMessages", {
       threadId: thread._id,
       gmailMessageId: args.gmailMessageId,
       rfcMessageId: args.rfcMessageId,
@@ -671,6 +705,12 @@ export const storeInboundMessage = internalMutation({
       sentAt: args.sentAt,
       createdAt: now,
     });
+    await ctx.db.insert("emailAiAnalysis", {
+      emailMessageId: inboundMessageId, emailThreadId: thread._id, customerId: thread.customerId,
+      quoteId: thread.quoteId, bookingId: thread.bookingId, primaryIntent: "OTHER", priority: "NORMAL",
+      requiresResponse: true, summary: "Analysis queued.", status: "PENDING", createdAt: now, updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: inboundMessageId });
 
     const priorUnmatched = await ctx.db
       .query("unmatchedEmailMessages")
@@ -682,7 +722,7 @@ export const storeInboundMessage = internalMutation({
         .withIndex("by_gmail_message", (index) => index.eq("gmailMessageId", message.gmailMessageId))
         .first();
       if (!duplicate) {
-        await ctx.db.insert("emailMessages", {
+        const recoveredMessageId = await ctx.db.insert("emailMessages", {
           threadId: thread._id,
           gmailMessageId: message.gmailMessageId,
           rfcMessageId: message.rfcMessageId,
@@ -695,6 +735,12 @@ export const storeInboundMessage = internalMutation({
           sentAt: message.sentAt,
           createdAt: message.receivedAt,
         });
+        await ctx.db.insert("emailAiAnalysis", {
+          emailMessageId: recoveredMessageId, emailThreadId: thread._id, customerId: thread.customerId,
+          quoteId: thread.quoteId, bookingId: thread.bookingId, primaryIntent: "OTHER", priority: "NORMAL",
+          requiresResponse: true, summary: "Analysis queued.", status: "PENDING", createdAt: message.receivedAt, updatedAt: now,
+        });
+        await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: recoveredMessageId });
       }
       await ctx.db.delete(message._id);
     }
@@ -702,6 +748,8 @@ export const storeInboundMessage = internalMutation({
     await ctx.db.patch(thread._id, {
       gmailThreadId: args.gmailThreadId,
       status: "WAITING_STAFF",
+      needsAttention: true,
+      waitingSince: thread.status === "WAITING_STAFF" ? (thread.waitingSince ?? now) : now,
       unreadCount: (thread.unreadCount ?? 0) + 1 + priorUnmatched.length,
       lastMessageAt: Math.max(thread.lastMessageAt, args.sentAt, ...priorUnmatched.map((item) => item.sentAt)),
       updatedAt: now,
@@ -1006,7 +1054,7 @@ export const attachUnmatchedThread = mutation({
         .withIndex("by_gmail_message", (index) => index.eq("gmailMessageId", message.gmailMessageId))
         .first();
       if (!duplicate) {
-        await ctx.db.insert("emailMessages", {
+        const attachedMessageId = await ctx.db.insert("emailMessages", {
           threadId,
           gmailMessageId: message.gmailMessageId,
           rfcMessageId: message.rfcMessageId,
@@ -1019,6 +1067,12 @@ export const attachUnmatchedThread = mutation({
           sentAt: message.sentAt,
           createdAt: message.receivedAt,
         });
+        await ctx.db.insert("emailAiAnalysis", {
+          emailMessageId: attachedMessageId, emailThreadId: threadId, customerId, quoteId, bookingId,
+          primaryIntent: "OTHER", priority: "NORMAL", requiresResponse: true, summary: "Analysis queued.",
+          status: "PENDING", createdAt: message.receivedAt, updatedAt: now,
+        });
+        await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: attachedMessageId });
         inserted += 1;
       }
       await ctx.db.delete(message._id);
@@ -1031,6 +1085,8 @@ export const attachUnmatchedThread = mutation({
       activeContext,
       gmailThreadId: selected.gmailThreadId,
       status: "WAITING_STAFF",
+      needsAttention: true,
+      waitingSince: currentThread?.status === "WAITING_STAFF" ? (currentThread.waitingSince ?? now) : now,
       unreadCount: (currentThread?.unreadCount ?? 0) + inserted,
       lastMessageAt: Math.max(currentThread?.lastMessageAt ?? 0, latestAt),
       updatedAt: now,

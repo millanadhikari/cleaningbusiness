@@ -25,6 +25,30 @@ async function executeTool(ctx: ActionCtx, sessionId: Id<"crmAiSessions">, call:
       sessionId, bookingId, body,
     });
   }
+  if (call.function.name === "createEmailFollowUp") {
+    return ctx.runMutation(internal.crmAiData.prepareEmailFollowUp, {
+      sessionId,
+      emailThreadId: typeof args.emailThreadId === "string" ? args.emailThreadId : "",
+      title: typeof args.title === "string" ? args.title : "",
+      dueAt: typeof args.dueAt === "string" ? args.dueAt : "",
+    });
+  }
+  if (call.function.name === "createBookingChangeRequest") {
+    return ctx.runMutation(internal.crmAiData.prepareBookingChangeRequest, {
+      sessionId,
+      bookingId: typeof args.bookingId === "string" ? args.bookingId : "",
+      requestedDate: typeof args.requestedDate === "string" ? args.requestedDate : undefined,
+      requestedTime: typeof args.requestedTime === "string" ? args.requestedTime : undefined,
+      reason: typeof args.reason === "string" ? args.reason : undefined,
+    });
+  }
+  if (call.function.name === "createCancellationRequest") {
+    return ctx.runMutation(internal.crmAiData.prepareCancellationRequest, {
+      sessionId,
+      bookingId: typeof args.bookingId === "string" ? args.bookingId : "",
+      reason: typeof args.reason === "string" ? args.reason : undefined,
+    });
+  }
   return ctx.runQuery(internal.crmAiData.executeReadTool, {
     sessionId,
     toolName: call.function.name,
@@ -44,7 +68,7 @@ export const sendMessage = action({
     if (prepared.explicitConfirmation && prepared.pendingAction) {
       const result = await ctx.runMutation(internal.crmAiData.confirmPendingAction, { sessionId: args.sessionId });
       const content = result.status === "SUCCESS"
-        ? `Internal note added to booking ${result.bookingReference}.`
+        ? result.message
         : "There is no pending action to confirm.";
       await ctx.runMutation(internal.crmAiData.storeAssistant, { sessionId: args.sessionId, content });
       return { message: content, actionCompleted: result.status === "SUCCESS" };

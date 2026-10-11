@@ -86,7 +86,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
     items: [
       { href: '/admin/quotes', label: 'Quotes', icon: ClipboardList },
       { href: '/admin/bookings', label: 'Bookings', icon: CalendarCheck },
-      { href: '/admin/email/unmatched', label: 'Unmatched Email', icon: MailQuestion },
+      { href: '/admin/email/unmatched', label: 'Email Inbox', icon: MailQuestion },
       { href: '/admin/calendar', label: 'Calendar', icon: CalendarDays },
       { href: '/admin/cleaners', label: 'Team', icon: UserRoundCheck },
       { href: '/admin/customers', label: 'Customers', icon: UsersRound },
@@ -129,7 +129,7 @@ const pageTitles: Record<string, string> = {
   '/admin/users': 'Admin Users',
   '/admin/usage': 'Platform Usage',
   '/admin/settings': 'Settings',
-  '/admin/email/unmatched': 'Unmatched Email',
+  '/admin/email/unmatched': 'Email Inbox',
 };
 
 function isActiveRoute(pathname: string, href: string) {

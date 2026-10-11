@@ -132,8 +132,112 @@ export const prepareInternalNote = internalMutation({
   args: { sessionId: v.id("crmAiSessions"), bookingId: v.string(), body: v.string() }, handler: async (ctx, args) => { const user = await requireRole(ctx, [...roles]); const session = await ctx.db.get(args.sessionId); if (!session || session.userId !== user._id) throw new Error("Conversation not found."); const bookingId = ctx.db.normalizeId("bookings", args.bookingId); const booking = bookingId ? await ctx.db.get(bookingId) : null; if (!booking) throw new Error("Booking not found."); const body = args.body.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 2000); if (!body) throw new Error("Note content is required."); await ctx.db.patch(session._id, { pendingAction: { toolName: "addInternalNote", entityType: "BOOKING", entityId: String(booking._id), body, preparedAt: Date.now() }, updatedAt: Date.now() }); return { status: "CONFIRMATION_REQUIRED" as const, bookingReference: booking.reference ?? String(booking._id), note: body, instruction: "Ask the user to confirm with the Confirm button. The note has not been added." }; },
 });
 
+export const prepareEmailFollowUp = internalMutation({
+  args: { sessionId: v.id("crmAiSessions"), emailThreadId: v.string(), title: v.string(), dueAt: v.string() },
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, [...roles]);
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.userId !== user._id) throw new Error("Conversation not found.");
+    const threadId = ctx.db.normalizeId("emailThreads", args.emailThreadId);
+    const thread = threadId ? await ctx.db.get(threadId) : null;
+    if (!thread) throw new Error("Email thread not found.");
+    const title = args.title.trim().slice(0, 160);
+    const dueAt = Date.parse(args.dueAt);
+    if (!title || !Number.isFinite(dueAt) || dueAt <= Date.now()) throw new Error("Provide a title and a future follow-up time.");
+    const idempotencyKey = `crm-ai-follow-up:${session._id}:${thread._id}:${dueAt}`;
+    await ctx.db.patch(session._id, { pendingAction: { toolName: "createEmailFollowUp", entityType: "EMAIL_THREAD", entityId: String(thread._id), title, dueAt, idempotencyKey, preparedAt: Date.now() }, updatedAt: Date.now() });
+    return { status: "CONFIRMATION_REQUIRED" as const, title, dueAt, instruction: "Show this follow-up and ask for confirmation. It has not been created." };
+  },
+});
+
+export const prepareBookingChangeRequest = internalMutation({
+  args: { sessionId: v.id("crmAiSessions"), bookingId: v.string(), requestedDate: v.optional(v.string()), requestedTime: v.optional(v.string()), reason: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, [...roles]);
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.userId !== user._id) throw new Error("Conversation not found.");
+    const bookingId = ctx.db.normalizeId("bookings", args.bookingId);
+    const booking = bookingId ? await ctx.db.get(bookingId) : null;
+    if (!booking) throw new Error("Booking not found.");
+    if (!args.requestedDate && !args.requestedTime) throw new Error("A requested date or time is required.");
+    if (args.requestedDate && !/^\d{4}-\d{2}-\d{2}$/.test(args.requestedDate)) throw new Error("Use YYYY-MM-DD for the requested date.");
+    const requestedDate = args.requestedDate?.slice(0, 10);
+    const requestedTime = args.requestedTime?.trim().slice(0, 30);
+    const reason = args.reason?.trim().slice(0, 500);
+    const idempotencyKey = `crm-ai-change:${session._id}:${booking._id}:${requestedDate ?? ""}:${requestedTime ?? ""}`;
+    await ctx.db.patch(session._id, { pendingAction: { toolName: "createBookingChangeRequest", entityType: "BOOKING", entityId: String(booking._id), requestedDate, requestedTime, reason, idempotencyKey, preparedAt: Date.now() }, updatedAt: Date.now() });
+    return { status: "CONFIRMATION_REQUIRED" as const, bookingReference: booking.reference, requestedDate, requestedTime, reason, instruction: "Show the exact request and ask for confirmation. The booking has not been changed." };
+  },
+});
+
+export const prepareCancellationRequest = internalMutation({
+  args: { sessionId: v.id("crmAiSessions"), bookingId: v.string(), reason: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, [...roles]);
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.userId !== user._id) throw new Error("Conversation not found.");
+    const bookingId = ctx.db.normalizeId("bookings", args.bookingId);
+    const booking = bookingId ? await ctx.db.get(bookingId) : null;
+    if (!booking) throw new Error("Booking not found.");
+    const reason = args.reason?.trim().slice(0, 500);
+    const idempotencyKey = `crm-ai-cancel:${session._id}:${booking._id}`;
+    await ctx.db.patch(session._id, { pendingAction: { toolName: "createCancellationRequest", entityType: "BOOKING", entityId: String(booking._id), reason, idempotencyKey, preparedAt: Date.now() }, updatedAt: Date.now() });
+    return { status: "CONFIRMATION_REQUIRED" as const, bookingReference: booking.reference, paymentStatus: booking.paymentStatus, warning: booking.paymentStatus !== "UNPAID" ? "Payment/refund review may be required." : undefined, reason, instruction: "Ask for confirmation. The booking has not been cancelled." };
+  },
+});
+
 export const confirmPendingAction = internalMutation({
-  args: { sessionId: v.id("crmAiSessions") }, handler: async (ctx, args) => { const user = await requireRole(ctx, [...roles]); const session = await ctx.db.get(args.sessionId); if (!session || session.userId !== user._id) throw new Error("Conversation not found."); const pending = session.pendingAction; if (!pending || Date.now() - pending.preparedAt > 10 * 60_000) { await ctx.db.patch(session._id, { pendingAction: undefined }); return { status: "NO_PENDING_ACTION" as const }; } const bookingId = ctx.db.normalizeId("bookings", pending.entityId); const booking = bookingId ? await ctx.db.get(bookingId) : null; if (!booking) throw new Error("Booking no longer exists."); await ctx.db.insert("bookingNotes", { bookingId: booking._id, authorUserId: user._id, authorName: userName(user), kind: "ADMIN_NOTE", body: pending.body, source: "CRM_AI", createdAt: Date.now() }); await ctx.db.patch(session._id, { pendingAction: undefined, updatedAt: Date.now() }); await ctx.db.insert("crmAiAuditLogs", { userId: user._id, sessionId: session._id, tool: "addInternalNote", eventType: "CRM_AI_NOTE_CREATED", entityType: "BOOKING", entityId: String(booking._id), success: true, createdAt: Date.now() }); return { status: "SUCCESS" as const, bookingReference: booking.reference ?? String(booking._id) }; },
+  args: { sessionId: v.id("crmAiSessions") },
+  handler: async (ctx, args): Promise<{ status: "NO_PENDING_ACTION" } | { status: "SUCCESS"; message: string }> => {
+    const user = await requireRole(ctx, [...roles]);
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.userId !== user._id) throw new Error("Conversation not found.");
+    const pending = session.pendingAction;
+    if (!pending || Date.now() - pending.preparedAt > 10 * 60_000) {
+      await ctx.db.patch(session._id, { pendingAction: undefined });
+      return { status: "NO_PENDING_ACTION" };
+    }
+    const now = Date.now();
+    let message: string;
+    let eventType: "CRM_AI_NOTE_CREATED" | "CRM_AI_FOLLOW_UP_CREATED" | "CRM_AI_CHANGE_REQUEST_CREATED" | "CRM_AI_CANCELLATION_REQUEST_CREATED";
+    if (pending.toolName === "createEmailFollowUp") {
+      const threadId = ctx.db.normalizeId("emailThreads", pending.entityId);
+      const thread = threadId ? await ctx.db.get(threadId) : null;
+      if (!thread || !pending.title || !pending.dueAt || !pending.idempotencyKey) throw new Error("Prepared follow-up is no longer valid.");
+      const existing = await ctx.db.query("crmFollowUps").withIndex("by_idempotency_key", q => q.eq("idempotencyKey", pending.idempotencyKey)).unique();
+      if (!existing) await ctx.db.insert("crmFollowUps", { type: "EMAIL_RESPONSE", customerId: thread.customerId, quoteId: thread.quoteId, bookingId: thread.bookingId, emailThreadId: thread._id, createdByUserId: user._id, source: "CRM_AI", title: pending.title, dueAt: pending.dueAt, status: "OPEN", idempotencyKey: pending.idempotencyKey, createdAt: now, updatedAt: now });
+      message = `Follow-up created for ${new Date(pending.dueAt).toLocaleString("en-AU")}.`;
+      eventType = "CRM_AI_FOLLOW_UP_CREATED";
+    } else {
+      const bookingId = ctx.db.normalizeId("bookings", pending.entityId);
+      const booking = bookingId ? await ctx.db.get(bookingId) : null;
+      if (!booking) throw new Error("Booking no longer exists.");
+      if (pending.toolName === "addInternalNote") {
+        if (!pending.body) throw new Error("Prepared note is no longer valid.");
+        await ctx.db.insert("bookingNotes", { bookingId: booking._id, authorUserId: user._id, authorName: userName(user), kind: "ADMIN_NOTE", body: pending.body, source: "CRM_AI", createdAt: now });
+        message = `Internal note added to booking ${booking.reference ?? booking._id}.`;
+        eventType = "CRM_AI_NOTE_CREATED";
+      } else {
+        if (!pending.idempotencyKey) throw new Error("Prepared request is no longer valid.");
+        const idempotencyKey = pending.idempotencyKey;
+        const existing = await ctx.db.query("bookingChangeRequests").withIndex("by_idempotency_key", q => q.eq("idempotencyKey", idempotencyKey)).unique();
+        if (!existing) await ctx.db.insert("bookingChangeRequests", {
+          bookingId: booking._id, customerId: booking.customerId, source: "CRM_AI",
+          type: pending.toolName === "createCancellationRequest" ? "CANCELLATION" : "RESCHEDULE",
+          currentSnapshot: { scheduledDate: booking.scheduledDate, scheduledTime: booking.scheduledTime, bookingStatus: booking.status, bookingUpdatedAt: booking.updatedAt },
+          requestedChanges: pending.toolName === "createCancellationRequest" ? {} : { scheduledDate: pending.requestedDate, scheduledTime: pending.requestedTime },
+          reason: pending.reason, status: "PENDING", idempotencyKey, createdAt: now, updatedAt: now,
+        });
+        message = pending.toolName === "createCancellationRequest"
+          ? `Cancellation request created for booking ${booking.reference ?? booking._id}. The booking remains unchanged pending review.`
+          : `Booking change request created for ${booking.reference ?? booking._id}. The booking remains unchanged pending review.`;
+        eventType = pending.toolName === "createCancellationRequest" ? "CRM_AI_CANCELLATION_REQUEST_CREATED" : "CRM_AI_CHANGE_REQUEST_CREATED";
+      }
+    }
+    await ctx.db.patch(session._id, { pendingAction: undefined, updatedAt: now });
+    await ctx.db.insert("crmAiAuditLogs", { userId: user._id, sessionId: session._id, tool: pending.toolName, eventType, entityType: pending.entityType, entityId: pending.entityId, success: true, createdAt: now });
+    return { status: "SUCCESS", message };
+  },
 });
 
 export const executeReadTool = internalQuery({
@@ -151,6 +255,43 @@ export const executeReadTool = internalQuery({
     if (tool === "getQuoteSummary") { const raw=text(args,"quoteId")??(session.currentContextType==="QUOTE"?session.currentContextId:undefined), ref=text(args,"quoteReference"); let quote: Doc<"quoteRequests"> | null = null; if(raw){const id=ctx.db.normalizeId("quoteRequests",raw);if(id)quote=await ctx.db.get(id);} if(!quote&&ref) quote=await ctx.db.query("quoteRequests").withIndex("by_reference",q=>q.eq("reference",ref.toUpperCase())).first(); if(!quote)return{status:"NOT_FOUND"}; const customer=await ctx.db.get(quote.customerId); return{id:quote._id,reference:quote.reference,status:quote.status,service:quote.serviceType,customer:customer?{id:customer._id,name:[customer.firstName,customer.lastName].filter(Boolean).join(" "),email:customer.email,phone:customer.phone}:null,preferredDate:quote.preferredDate,preferredTime:quote.preferredTime,location:[quote.suburb,quote.state,quote.postcode].join(" "),estimatedTotal:quote.estimatedTotalCents?money(quote.estimatedTotalCents):undefined,notes:quote.notes?.slice(0,1000)}; }
     if (tool === "getPendingBookingChangeRequests") { const rows=await ctx.db.query("bookingChangeRequests").withIndex("by_created_at").order("desc").take(100); return Promise.all(rows.filter(row=>row.status==="PENDING").slice(0,limit(args)).map(async row=>{const booking=await ctx.db.get(row.bookingId); return{id:row._id,type:row.type,bookingId:row.bookingId,bookingReference:booking?.reference,status:row.status,requestedChanges:row.requestedChanges,reason:row.reason,createdAt:row.createdAt};})); }
     if (tool === "getServicePerformance") { const from=date(text(args,"fromDate"),today()), to=date(text(args,"toDate"),today()); const bookings=await ctx.db.query("bookings").withIndex("by_scheduled_date",q=>q.gte("scheduledDate",from).lte("scheduledDate",to)).take(500); const services=await ctx.db.query("services").collect(); const names=new Map(services.map(row=>[String(row._id),row.name])); const result=new Map<string,{service:string;bookings:number;valueCents:number}>(); for(const booking of bookings){const key=String(booking.serviceId), current=result.get(key)??{service:names.get(key)??"Unknown",bookings:0,valueCents:0};current.bookings++;current.valueCents+=booking.finalTotalCents;result.set(key,current);} return Array.from(result.values()).map(row=>({...row,value:money(row.valueCents)})).sort((a,b)=>b.bookings-a.bookings); }
+    if (["getEmailInboxSummary", "getUrgentEmailThreads", "getThreadsWaitingForStaff", "getComplaintThreads", "getRescheduleEmailThreads"].includes(tool)) {
+      const take = limit(args);
+      let rows: Doc<"emailThreads">[];
+      if (tool === "getUrgentEmailThreads") rows = await ctx.db.query("emailThreads").withIndex("by_priority_and_last_message", q => q.eq("latestPriority", "URGENT")).order("desc").take(take);
+      else if (tool === "getThreadsWaitingForStaff") rows = await ctx.db.query("emailThreads").withIndex("by_status_and_last_message", q => q.eq("status", "WAITING_STAFF")).order("desc").take(100);
+      else if (tool === "getComplaintThreads") rows = await ctx.db.query("emailThreads").withIndex("by_intent_and_last_message", q => q.eq("latestIntent", "COMPLAINT")).order("desc").take(take);
+      else if (tool === "getRescheduleEmailThreads") rows = await ctx.db.query("emailThreads").withIndex("by_intent_and_last_message", q => q.eq("latestIntent", "RESCHEDULE_REQUEST")).order("desc").take(take);
+      else if (text(args, "filter") === "URGENT") rows = await ctx.db.query("emailThreads").withIndex("by_priority_and_last_message", q => q.eq("latestPriority", "URGENT")).order("desc").take(take);
+      else rows = await ctx.db.query("emailThreads").withIndex("by_attention_and_last_message", q => q.eq("needsAttention", true)).order("desc").take(take);
+      const olderThan = Math.max(0, numberValue(args, "olderThanHours") ?? 0) * 60 * 60_000;
+      return rows.filter(row => !olderThan || Date.now() - (row.waitingSince ?? row.lastMessageAt) >= olderThan).slice(0, take).map(row => ({ id: row._id, subject: row.subject, bookingId: row.bookingId, quoteId: row.quoteId, status: row.status, intent: row.latestIntent, priority: row.latestPriority, summary: row.aiSummary, suggestedAction: row.latestSuggestedAction, unreadCount: row.unreadCount ?? 0, waitingSince: row.waitingSince, lastMessageAt: row.lastMessageAt }));
+    }
+    if (tool === "getLatestEmailAnalysis") {
+      const result = await emailThread(ctx, args);
+      if (result.status !== "OK") return result;
+      const id = ctx.db.normalizeId("emailThreads", String(result.thread.id));
+      const analysis = id ? await ctx.db.query("emailAiAnalysis").withIndex("by_thread", q => q.eq("emailThreadId", id)).order("desc").first() : null;
+      return analysis ? { status: "OK", analysis: { intent: analysis.primaryIntent, secondaryIntents: analysis.secondaryIntents, priority: analysis.priority, requiresResponse: analysis.requiresResponse, suggestedAction: analysis.suggestedAction, summary: analysis.summary, requestedDate: analysis.extractedRequestedDate, requestedTime: analysis.extractedRequestedTime, reason: analysis.extractedReason, confidence: analysis.confidence, analysisStatus: analysis.status } } : { status: "NOT_ANALYSED" };
+    }
+    if (tool === "getEmailResponseMetrics") {
+      const fromDate = date(text(args, "fromDate"), new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
+      const toDate = date(text(args, "toDate"), today());
+      const from = Date.parse(`${fromDate}T00:00:00Z`), to = Date.parse(`${toDate}T23:59:59Z`);
+      const threads = await ctx.db.query("emailThreads").withIndex("by_last_message").order("desc").take(200);
+      const waiting = threads.filter(row => row.status === "WAITING_STAFF");
+      const responseTimes: number[] = [];
+      for (const thread of threads) {
+        const messages = await ctx.db.query("emailMessages").withIndex("by_thread", q => q.eq("threadId", thread._id)).order("asc").take(50);
+        for (let index = 0; index < messages.length; index += 1) {
+          const message = messages[index];
+          if (message.direction !== "INBOUND" || message.sentAt < from || message.sentAt > to) continue;
+          const response = messages.slice(index + 1).find(item => item.direction === "OUTBOUND");
+          if (response) responseTimes.push(Math.max(0, response.sentAt - message.sentAt));
+        }
+      }
+      return { range: { fromDate, toDate }, responsesMeasured: responseTimes.length, firstResponseMinutes: responseTimes.length ? Math.round(responseTimes[0] / 60000) : null, averageResponseMinutes: responseTimes.length ? Math.round(responseTimes.reduce((sum, value) => sum + value, 0) / responseTimes.length / 60000) : null, waitingForStaff: waiting.length, waitingOver24Hours: waiting.filter(row => Date.now() - (row.waitingSince ?? row.lastMessageAt) > 86400000).length, urgentUnresolved: waiting.filter(row => row.latestPriority === "URGENT").length };
+    }
     if (tool === "getEmailThread" || tool === "summarizeEmailThreadData" || tool === "draftEmailReply") { const merged={...args}; if(!text(merged,"emailThreadId")&&session.currentContextType==="EMAIL_THREAD")merged.emailThreadId=session.currentContextId; if(!text(merged,"bookingId")&&session.currentContextType==="BOOKING")merged.bookingId=session.currentContextId; if(!text(merged,"quoteId")&&session.currentContextType==="QUOTE")merged.quoteId=session.currentContextId; return {...await emailThread(ctx,merged), draftOnly:tool==="draftEmailReply", objective:text(args,"objective")?.slice(0,500)}; }
     if (tool === "getRecentCRMActivity") { const take=limit(args); const [bookings,quotes,changes,threads]=await Promise.all([ctx.db.query("bookings").withIndex("by_created_at").order("desc").take(take),ctx.db.query("quoteRequests").withIndex("by_created_at").order("desc").take(take),ctx.db.query("bookingChangeRequests").withIndex("by_created_at").order("desc").take(take),ctx.db.query("emailThreads").collect()]); return{bookings:bookings.map(row=>({id:row._id,reference:row.reference,status:row.status,createdAt:row.createdAt})),quotes:quotes.map(row=>({id:row._id,reference:row.reference,status:row.status,createdAt:row.createdAt})),changeRequests:changes.map(row=>({id:row._id,type:row.type,status:row.status,createdAt:row.createdAt})),emailThreads:threads.sort((a,b)=>b.lastMessageAt-a.lastMessageAt).slice(0,take).map(row=>({id:row._id,subject:row.subject,status:row.status,lastMessageAt:row.lastMessageAt}))}; }
     if (["getAnalyticsSummary","getConversionSummary","getTrafficSummary"].includes(tool)) { const fromDate=date(text(args,"fromDate"),new Date(Date.now()-6*86400000).toISOString().slice(0,10)), toDate=date(text(args,"toDate"),today()); const from=Date.parse(`${fromDate}T00:00:00Z`),to=Date.parse(`${toDate}T23:59:59Z`); const [sessions,quotes,bookings,payments]=await Promise.all([ctx.db.query("websiteSessions").withIndex("by_created_at",q=>q.gte("createdAt",from).lte("createdAt",to)).collect(),ctx.db.query("quoteRequests").withIndex("by_created_at",q=>q.gte("createdAt",from).lte("createdAt",to)).collect(),ctx.db.query("bookings").withIndex("by_created_at",q=>q.gte("createdAt",from).lte("createdAt",to)).collect(),ctx.db.query("bookingPayments").withIndex("by_paid_at",q=>q.gte("paidAt",from).lte("paidAt",to)).collect()]); const revenue=payments.filter(row=>row.status==="PAID").reduce((sum,row)=>sum+row.amountCents,0); return{source:"Convex first-party business analytics",range:{fromDate,toDate},visitors:sessions.length,quotes:quotes.length,bookings:bookings.length,collectedRevenue:money(revenue),visitorToQuotePercent:sessions.length?Math.round(quotes.length/sessions.length*10000)/100:0,quoteToBookingPercent:quotes.length?Math.round(bookings.length/quotes.length*10000)/100:0,note:"Do not merge these figures with GA4 or Search Console."}; }

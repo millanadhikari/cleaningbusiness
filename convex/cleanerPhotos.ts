@@ -12,7 +12,6 @@ const photoType = v.union(
 
 const ALLOWED_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 const MAX_PHOTO_SIZE_BYTES = 10 * 1024 * 1024;
-const CLEANER_DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 type PhotoType = Doc<"cleanerPhotos">["photoType"];
 type AllowedContentType = (typeof ALLOWED_CONTENT_TYPES)[number];
@@ -235,8 +234,7 @@ export const listBookingPhotos = query({
           const cleanerCanDelete = viewer.cleaner?._id === photo.cleanerId &&
             viewer.assignment !== null &&
             viewer.booking.status === "CONFIRMED" &&
-            ["ACCEPTED", "IN_PROGRESS"].includes(viewer.assignment.status ?? "ACCEPTED") &&
-            Date.now() - photo.uploadedAt <= CLEANER_DELETE_WINDOW_MS;
+            ["ACCEPTED", "IN_PROGRESS"].includes(viewer.assignment.status ?? "ACCEPTED");
           return {
             photoId: photo._id,
             photoType: photo.photoType,
@@ -286,8 +284,7 @@ export const preparePhotoDeletion = internalQuery({
         viewer.cleaner?._id !== photo.cleanerId ||
         viewer.booking.status !== "CONFIRMED" ||
         !viewer.assignment ||
-        !["ACCEPTED", "IN_PROGRESS"].includes(viewer.assignment.status ?? "ACCEPTED") ||
-        Date.now() - photo.uploadedAt > CLEANER_DELETE_WINDOW_MS
+        !["ACCEPTED", "IN_PROGRESS"].includes(viewer.assignment.status ?? "ACCEPTED")
       ) {
         throw new Error("This photo can no longer be deleted from the cleaner portal.");
       }

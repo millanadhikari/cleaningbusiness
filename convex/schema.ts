@@ -25,6 +25,20 @@ export default defineSchema({
     scope: v.string(),
     status: v.union(v.literal("ACTIVE"), v.literal("DISCONNECTED")),
     gmailHistoryId: v.optional(v.string()),
+    gmailPendingHistoryId: v.optional(v.string()),
+    gmailSyncStatus: v.optional(
+      v.union(
+        v.literal("PENDING"),
+        v.literal("RUNNING"),
+        v.literal("ERROR"),
+      ),
+    ),
+    gmailSyncLeaseToken: v.optional(v.string()),
+    gmailSyncLeaseUntil: v.optional(v.number()),
+    gmailSyncAttempts: v.optional(v.number()),
+    gmailSyncRetryAt: v.optional(v.number()),
+    gmailSyncLastError: v.optional(v.string()),
+    gmailSyncUpdatedAt: v.optional(v.number()),
     watchExpiration: v.optional(v.number()),
     watchUpdatedAt: v.optional(v.number()),
     watchStatus: v.optional(v.union(v.literal("ACTIVE"), v.literal("ERROR"))),
@@ -819,6 +833,33 @@ export default defineSchema({
     .index("by_booking", ["bookingId"])
     .index("by_cleaner", ["cleanerId"])
     .index("by_booking_and_cleaner", ["bookingId", "cleanerId"]),
+  cleanerPhotos: defineTable({
+    bookingId: v.id("bookings"),
+    cleanerId: v.id("cleaners"),
+    cleanerUserId: v.id("users"),
+    storagePath: v.string(),
+    photoType: v.union(
+      v.literal("BEFORE"),
+      v.literal("AFTER"),
+      v.literal("ISSUE"),
+    ),
+    contentType: v.string(),
+    sizeBytes: v.number(),
+    originalFileName: v.optional(v.string()),
+    status: v.union(v.literal("UPLOADED"), v.literal("DELETED")),
+    uploadedAt: v.number(),
+    deleteAfter: v.optional(v.number()),
+    retentionHold: v.boolean(),
+    deletedAt: v.optional(v.number()),
+    deletedByUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_booking", ["bookingId"])
+    .index("by_booking_and_type", ["bookingId", "photoType"])
+    .index("by_delete_after", ["deleteAfter"])
+    .index("by_cleaner", ["cleanerId"])
+    .index("by_storage_path", ["storagePath"]),
   referenceCounters: defineTable({
     name: v.string(),
     currentValue: v.number(),

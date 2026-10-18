@@ -13,6 +13,18 @@ function decodeBase64UrlJson(value: string) {
   return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
+function isGmailPushNotification(
+  value: unknown,
+): value is { emailAddress: string; historyId: string } {
+  return typeof value === "object" &&
+    value !== null &&
+    "emailAddress" in value &&
+    typeof value.emailAddress === "string" &&
+    "historyId" in value &&
+    typeof value.historyId === "string" &&
+    /^\d+$/.test(value.historyId);
+}
+
 http.route({
   path: "/stripe/webhook",
   method: "POST",
@@ -99,27 +111,27 @@ http.route({
       "data" in body.message && typeof body.message.data === "string"
       ? body.message.data
       : null;
-    if (!data) return new Response("Malformed Pub/Sub payload.", { status: 400 });
 
-    let notification: unknown;
-    try {
-      notification = decodeBase64UrlJson(data);
-    } catch {
-      return new Response("Malformed Gmail notification.", { status: 400 });
+    // Pub/Sub normally wraps message.data in base64. If payload unwrapping is
+    // enabled on the subscription, Gmail's JSON notification is the body.
+    let notification: unknown = body;
+    if (data) {
+      try {
+        notification = decodeBase64UrlJson(data);
+      } catch {
+        console.error("Acknowledged Gmail Pub/Sub push with undecodable message data");
+        return new Response(null, { status: 204 });
+      }
     }
-    if (
-      typeof notification !== "object" ||
-      notification === null ||
-      !("emailAddress" in notification) ||
-      typeof notification.emailAddress !== "string" ||
-      !("historyId" in notification) ||
-      typeof notification.historyId !== "string" ||
-      !/^\d+$/.test(notification.historyId)
-    ) {
-      return new Response("Malformed Gmail notification.", { status: 400 });
+    if (!isGmailPushNotification(notification)) {
+      // The request has already passed Pub/Sub OIDC verification. A permanent
+      // payload error will never succeed on retry, so acknowledge it to avoid
+      // an unbounded poison-message retry loop.
+      console.error("Acknowledged Gmail Pub/Sub push with an invalid notification payload");
+      return new Response(null, { status: 204 });
     }
 
-    await ctx.scheduler.runAfter(0, internal.gmailActions.processHistoryNotification, {
+    await ctx.runMutation(internal.gmail.enqueueHistoryNotification, {
       emailAddress: notification.emailAddress,
       historyId: notification.historyId,
     });

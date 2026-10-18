@@ -53,6 +53,7 @@ import type * as lib_sendTransactionalEmail from "../lib/sendTransactionalEmail.
 import type * as lib_sydneyServiceArea from "../lib/sydneyServiceArea.js";
 import type * as lib_websiteAnalytics from "../lib/websiteAnalytics.js";
 import type * as lib_workReferences from "../lib/workReferences.js";
+import type * as notifications from "../notifications.js";
 import type * as platformUsage from "../platformUsage.js";
 import type * as quoteData from "../quoteData.js";
 import type * as quoteDocuments from "../quoteDocuments.js";
@@ -117,6 +118,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sydneyServiceArea": typeof lib_sydneyServiceArea;
   "lib/websiteAnalytics": typeof lib_websiteAnalytics;
   "lib/workReferences": typeof lib_workReferences;
+  notifications: typeof notifications;
   platformUsage: typeof platformUsage;
   quoteData: typeof quoteData;
   quoteDocuments: typeof quoteDocuments;

@@ -19,6 +19,48 @@ export default defineSchema({
   })
     .index("by_clerk_user_id", ["clerkUserId"])
     .index("by_email", ["email"]),
+  notifications: defineTable({
+    recipientUserId: v.id("users"),
+    type: v.union(
+      v.literal("QUOTE_REQUEST_NEW"),
+      v.literal("BOOKING_CREATED"),
+      v.literal("BOOKING_UPDATED"),
+      v.literal("BOOKING_CANCELLED"),
+      v.literal("BOOKING_CHANGE_REQUESTED"),
+      v.literal("JOB_OFFERED"),
+      v.literal("JOB_ACCEPTED"),
+      v.literal("JOB_DECLINED"),
+      v.literal("JOB_COMPLETED"),
+      v.literal("ISSUE_PHOTO_UPLOADED"),
+      v.literal("CUSTOMER_EMAIL_RECEIVED"),
+      v.literal("PAYMENT_SUCCEEDED"),
+      v.literal("PAYMENT_FAILED"),
+      v.literal("ADMIN_MESSAGE"),
+      v.literal("JOB_REMINDER"),
+    ),
+    title: v.string(),
+    body: v.string(),
+    entityType: v.optional(
+      v.union(
+        v.literal("BOOKING"),
+        v.literal("QUOTE_REQUEST"),
+        v.literal("EMAIL_THREAD"),
+        v.literal("PAYMENT"),
+        v.literal("SYSTEM"),
+      ),
+    ),
+    entityId: v.optional(v.string()),
+    deepLink: v.optional(v.string()),
+    priority: v.union(v.literal("NORMAL"), v.literal("HIGH")),
+    dedupeKey: v.string(),
+    isRead: v.boolean(),
+    readAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_recipient_and_created_at", ["recipientUserId", "createdAt"])
+    .index("by_recipient_and_read_and_created_at", ["recipientUserId", "isRead", "createdAt"])
+    .index("by_recipient_and_dedupe_key", ["recipientUserId", "dedupeKey"])
+    .index("by_created_at", ["createdAt"]),
   gmailConnections: defineTable({
     email: v.string(),
     refreshToken: v.optional(v.string()),

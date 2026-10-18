@@ -835,7 +835,7 @@ export default defineSchema({
     .index("by_booking_and_cleaner", ["bookingId", "cleanerId"]),
   cleanerPhotos: defineTable({
     bookingId: v.id("bookings"),
-    cleanerId: v.id("cleaners"),
+    cleanerId: v.optional(v.id("cleaners")),
     cleanerUserId: v.id("users"),
     storagePath: v.string(),
     photoType: v.union(

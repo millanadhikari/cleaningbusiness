@@ -6,6 +6,8 @@ import { internalMutation, internalQuery, mutation, query } from "./_generated/s
 import { requireRole } from "./lib/auth";
 
 const adminRoles = ["SUPER_ADMIN", "ADMIN"] as const;
+const GMAIL_SYNC_LEASE_MS = 10 * 60 * 1000;
+const GMAIL_SYNC_RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000] as const;
 
 type EmailAttachTarget = {
   type: "BOOKING" | "QUOTE";
@@ -57,6 +59,9 @@ export const getConnectionStatus = query({
       watchExpiration: connection?.watchExpiration,
       watchUpdatedAt: connection?.watchUpdatedAt,
       watchError: user.role === "SUPER_ADMIN" ? connection?.watchError : undefined,
+      syncStatus: connection?.gmailSyncStatus,
+      syncRetryAt: connection?.gmailSyncRetryAt,
+      syncError: user.role === "SUPER_ADMIN" ? connection?.gmailSyncLastError : undefined,
     };
   },
 });
@@ -235,6 +240,14 @@ export const storeConnection = internalMutation({
         scope: args.scope,
         status: "ACTIVE",
         connectedByUserId: user._id,
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: undefined,
         updatedAt: now,
       });
       return matching._id;
@@ -263,6 +276,14 @@ export const markDisconnected = internalMutation({
         status: "DISCONNECTED",
         watchStatus: undefined,
         watchExpiration: undefined,
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: undefined,
         updatedAt: Date.now(),
       });
     }
@@ -280,6 +301,14 @@ export const markProviderDisconnected = internalMutation({
         status: "DISCONNECTED",
         watchStatus: undefined,
         watchExpiration: undefined,
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: undefined,
         updatedAt: Date.now(),
       });
     }
@@ -578,6 +607,8 @@ export const getActiveConnection = internalQuery({
       email: connection.email,
       refreshToken: connection.refreshToken,
       gmailHistoryId: connection.gmailHistoryId,
+      watchExpiration: connection.watchExpiration,
+      watchStatus: connection.watchStatus,
     };
   },
 });
@@ -593,9 +624,10 @@ export const updateWatchState = internalMutation({
     if (!connection || connection.status !== "ACTIVE") return null;
     const now = Date.now();
     await ctx.db.patch(connection._id, {
-      gmailHistoryId: historyIdIsAfter(args.gmailHistoryId, connection.gmailHistoryId)
-        ? args.gmailHistoryId
-        : connection.gmailHistoryId,
+      // A renewed watch returns Gmail's current history ID, not a cursor that we
+      // have successfully ingested. Only initialize the cursor for a new
+      // connection; normal sync completion advances it.
+      gmailHistoryId: connection.gmailHistoryId ?? args.gmailHistoryId,
       watchExpiration: args.watchExpiration,
       watchUpdatedAt: now,
       watchStatus: "ACTIVE",
@@ -634,6 +666,202 @@ export const advanceHistoryId = internalMutation({
       });
     }
     return null;
+  },
+});
+
+export const enqueueHistoryNotification = internalMutation({
+  args: { emailAddress: v.string(), historyId: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    if (!connection?.refreshToken) return { scheduled: false, reason: "not_connected" as const };
+    if (args.emailAddress.trim().toLowerCase() !== connection.email.trim().toLowerCase()) {
+      return { scheduled: false, reason: "mailbox_mismatch" as const };
+    }
+    if (!historyIdIsAfter(args.historyId, connection.gmailHistoryId)) {
+      return { scheduled: false, reason: "stale" as const };
+    }
+
+    const pendingHistoryId = historyIdIsAfter(args.historyId, connection.gmailPendingHistoryId)
+      ? args.historyId
+      : connection.gmailPendingHistoryId;
+    const now = Date.now();
+    const runningWithLease = connection.gmailSyncStatus === "RUNNING" &&
+      (connection.gmailSyncLeaseUntil ?? 0) > now;
+    const alreadyScheduled = connection.gmailSyncStatus === "PENDING" || runningWithLease;
+    const sameFailedTarget = connection.gmailSyncStatus === "ERROR" &&
+      !historyIdIsAfter(args.historyId, connection.gmailPendingHistoryId);
+
+    if (alreadyScheduled || sameFailedTarget) {
+      if (pendingHistoryId !== connection.gmailPendingHistoryId) {
+        await ctx.db.patch(connection._id, {
+          gmailPendingHistoryId: pendingHistoryId,
+          gmailSyncUpdatedAt: now,
+          updatedAt: now,
+        });
+      }
+      return {
+        scheduled: false,
+        reason: sameFailedTarget ? "retry_exhausted" as const : "coalesced" as const,
+      };
+    }
+
+    await ctx.db.patch(connection._id, {
+      gmailPendingHistoryId: pendingHistoryId,
+      gmailSyncStatus: "PENDING",
+      gmailSyncLeaseToken: undefined,
+      gmailSyncLeaseUntil: undefined,
+      gmailSyncAttempts: 0,
+      gmailSyncRetryAt: undefined,
+      gmailSyncLastError: undefined,
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.gmailActions.processPendingHistory, {
+      connectionId: connection._id,
+    });
+    return { scheduled: true, reason: "queued" as const };
+  },
+});
+
+export const beginHistoryProcessing = internalMutation({
+  args: { connectionId: v.id("gmailConnections"), leaseToken: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (!connection?.refreshToken || connection.status !== "ACTIVE") return null;
+    if (connection.gmailSyncStatus !== "PENDING") return null;
+    if (
+      !connection.gmailPendingHistoryId ||
+      !historyIdIsAfter(connection.gmailPendingHistoryId, connection.gmailHistoryId)
+    ) {
+      const now = Date.now();
+      await ctx.db.patch(connection._id, {
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: now,
+        updatedAt: now,
+      });
+      return null;
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(connection._id, {
+      gmailSyncStatus: "RUNNING",
+      gmailSyncLeaseToken: args.leaseToken,
+      gmailSyncLeaseUntil: now + GMAIL_SYNC_LEASE_MS,
+      gmailSyncRetryAt: undefined,
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    return {
+      email: connection.email,
+      refreshToken: connection.refreshToken,
+      startHistoryId: connection.gmailHistoryId,
+      targetHistoryId: connection.gmailPendingHistoryId,
+    };
+  },
+});
+
+export const completeHistoryProcessing = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    leaseToken: v.string(),
+    gmailHistoryId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (
+      !connection ||
+      connection.status !== "ACTIVE" ||
+      connection.gmailSyncLeaseToken !== args.leaseToken
+    ) {
+      return { accepted: false, scheduled: false };
+    }
+
+    const completedHistoryId = historyIdIsAfter(args.gmailHistoryId, connection.gmailHistoryId)
+      ? args.gmailHistoryId
+      : connection.gmailHistoryId;
+    const hasMore = Boolean(
+      connection.gmailPendingHistoryId &&
+      historyIdIsAfter(connection.gmailPendingHistoryId, completedHistoryId),
+    );
+    const now = Date.now();
+    await ctx.db.patch(connection._id, {
+      gmailHistoryId: completedHistoryId,
+      gmailPendingHistoryId: hasMore ? connection.gmailPendingHistoryId : undefined,
+      gmailSyncStatus: hasMore ? "PENDING" : undefined,
+      gmailSyncLeaseToken: undefined,
+      gmailSyncLeaseUntil: undefined,
+      gmailSyncAttempts: hasMore ? 0 : undefined,
+      gmailSyncRetryAt: undefined,
+      gmailSyncLastError: undefined,
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    if (hasMore) {
+      await ctx.scheduler.runAfter(0, internal.gmailActions.processPendingHistory, {
+        connectionId: connection._id,
+      });
+    }
+    return { accepted: true, scheduled: hasMore };
+  },
+});
+
+export const failHistoryProcessing = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    leaseToken: v.string(),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (
+      !connection ||
+      connection.status !== "ACTIVE" ||
+      connection.gmailSyncLeaseToken !== args.leaseToken
+    ) {
+      return { accepted: false, scheduled: false };
+    }
+
+    const attempts = (connection.gmailSyncAttempts ?? 0) + 1;
+    const delay = GMAIL_SYNC_RETRY_DELAYS_MS[attempts - 1];
+    const now = Date.now();
+    if (delay === undefined) {
+      await ctx.db.patch(connection._id, {
+        gmailSyncStatus: "ERROR",
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: attempts,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: args.message.slice(0, 300),
+        gmailSyncUpdatedAt: now,
+        updatedAt: now,
+      });
+      return { accepted: true, scheduled: false };
+    }
+
+    const retryAt = now + delay;
+    await ctx.db.patch(connection._id, {
+      gmailSyncStatus: "PENDING",
+      gmailSyncLeaseToken: undefined,
+      gmailSyncLeaseUntil: undefined,
+      gmailSyncAttempts: attempts,
+      gmailSyncRetryAt: retryAt,
+      gmailSyncLastError: args.message.slice(0, 300),
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(delay, internal.gmailActions.processPendingHistory, {
+      connectionId: connection._id,
+    });
+    return { accepted: true, scheduled: true, retryAt };
   },
 });
 

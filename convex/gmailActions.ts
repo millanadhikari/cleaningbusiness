@@ -134,7 +134,11 @@ type ConnectionCredentials = {
   email: string;
   refreshToken: string;
   gmailHistoryId?: string;
+  watchExpiration?: number;
+  watchStatus?: "ACTIVE" | "ERROR";
 };
+
+const WATCH_RENEWAL_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 type ProcessingResult = "attached" | "unmatched" | "duplicate" | "ignored";
 
@@ -328,6 +332,12 @@ export const renewWatch = internalAction({
   handler: async (ctx) => {
     const connection = await ctx.runQuery(internal.gmail.getActiveConnection, {});
     if (!connection) return { renewed: false, reason: "not_connected" as const };
+    if (
+      connection.watchStatus === "ACTIVE" &&
+      (connection.watchExpiration ?? 0) > Date.now() + WATCH_RENEWAL_WINDOW_MS
+    ) {
+      return { renewed: false, reason: "not_due" as const };
+    }
     try {
       const watch = await startWatch(ctx, connection);
       return { renewed: true, ...watch };
@@ -473,24 +483,24 @@ async function fullInboxRecovery(
   return { historyId: profile.data.historyId, totals };
 }
 
-export const processHistoryNotification = internalAction({
-  args: { emailAddress: v.string(), historyId: v.string() },
-  handler: async (ctx, notification) => {
-    const connection = await ctx.runQuery(internal.gmail.getActiveConnection, {});
-    if (!connection) return { processed: false, reason: "not_connected" as const };
-    if (notification.emailAddress.trim().toLowerCase() !== connection.email.trim().toLowerCase()) {
-      console.error("Ignored Gmail notification for a different connected mailbox");
-      return { processed: false, reason: "mailbox_mismatch" as const };
-    }
-
+export const processPendingHistory = internalAction({
+  args: { connectionId: v.id("gmailConnections") },
+  handler: async (ctx, args) => {
+    const leaseToken = randomUUID();
+    const connection = await ctx.runMutation(internal.gmail.beginHistoryProcessing, {
+      connectionId: args.connectionId,
+      leaseToken,
+    });
+    if (!connection) return { processed: false, reason: "not_pending" as const };
     const oauth = oauthClient();
     oauth.setCredentials({ refresh_token: connection.refreshToken });
     const gmail = google.gmail({ version: "v1", auth: oauth });
     try {
-      if (!connection.gmailHistoryId) {
+      if (!connection.startHistoryId) {
         const recovery = await fullInboxRecovery(ctx, gmail, connection.email);
-        await ctx.runMutation(internal.gmail.advanceHistoryId, {
-          connectionId: connection.id,
+        await ctx.runMutation(internal.gmail.completeHistoryProcessing, {
+          connectionId: args.connectionId,
+          leaseToken,
           gmailHistoryId: recovery.historyId,
         });
         return { processed: true, recovered: true, ...recovery.totals };
@@ -498,12 +508,12 @@ export const processHistoryNotification = internalAction({
 
       const totals = { attached: 0, unmatched: 0, duplicate: 0, ignored: 0 };
       let pageToken: string | undefined;
-      let completedHistoryId = notification.historyId;
+      let completedHistoryId = connection.targetHistoryId;
       try {
         do {
           const page = await gmail.users.history.list({
             userId: "me",
-            startHistoryId: connection.gmailHistoryId,
+            startHistoryId: connection.startHistoryId,
             historyTypes: ["messageAdded"],
             maxResults: 500,
             pageToken,
@@ -520,52 +530,29 @@ export const processHistoryNotification = internalAction({
         if (!isExpiredHistoryError(error)) throw error;
         console.warn("Gmail history cursor expired; starting a full inbox recovery");
         const recovery = await fullInboxRecovery(ctx, gmail, connection.email);
-        await ctx.runMutation(internal.gmail.advanceHistoryId, {
-          connectionId: connection.id,
+        await ctx.runMutation(internal.gmail.completeHistoryProcessing, {
+          connectionId: args.connectionId,
+          leaseToken,
           gmailHistoryId: recovery.historyId,
         });
         return { processed: true, recovered: true, ...recovery.totals };
       }
 
-      await ctx.runMutation(internal.gmail.advanceHistoryId, {
-        connectionId: connection.id,
+      await ctx.runMutation(internal.gmail.completeHistoryProcessing, {
+        connectionId: args.connectionId,
+        leaseToken,
         gmailHistoryId: completedHistoryId,
       });
       return { processed: true, recovered: false, ...totals };
     } catch (error) {
       const message = safeProviderError(error);
       console.error("Gmail history synchronization failed", message);
-      await ctx.runMutation(internal.gmail.setWatchError, {
-        connectionId: connection.id,
+      await ctx.runMutation(internal.gmail.failHistoryProcessing, {
+        connectionId: args.connectionId,
+        leaseToken,
         message,
       });
-      throw new Error(message);
+      return { processed: false, reason: "provider_error" as const };
     }
-  },
-});
-
-export const pollInbox = internalAction({
-  args: {},
-  handler: async (ctx): Promise<unknown> => {
-    const connection: ConnectionCredentials | null = await ctx.runQuery(
-      internal.gmail.getActiveConnection,
-      {},
-    );
-    if (!connection) return { processed: false, reason: "not_connected" as const };
-
-    const oauth = oauthClient();
-    oauth.setCredentials({ refresh_token: connection.refreshToken });
-    const profile = await google.gmail({ version: "v1", auth: oauth }).users.getProfile({
-      userId: "me",
-    });
-    const historyId = profile.data.historyId;
-    if (!historyId || historyId === connection.gmailHistoryId) {
-      return { processed: false, reason: "up_to_date" as const };
-    }
-
-    return await ctx.runAction(internal.gmailActions.processHistoryNotification, {
-      emailAddress: connection.email,
-      historyId,
-    });
   },
 });

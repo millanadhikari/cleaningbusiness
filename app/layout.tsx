@@ -31,6 +31,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         {children}
       </ConfiguredAuthProviders>
     );
+  } else {
+    const { PublicConvexClientProvider } = await import(
+      '@/components/providers/convex-client-provider'
+    );
+    content = <PublicConvexClientProvider>{children}</PublicConvexClientProvider>;
   }
 
   return (

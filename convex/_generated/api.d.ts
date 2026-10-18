@@ -23,6 +23,8 @@ import type * as bootstrap from "../bootstrap.js";
 import type * as calendar from "../calendar.js";
 import type * as chat from "../chat.js";
 import type * as chatData from "../chatData.js";
+import type * as cleanerPhotoStorage from "../cleanerPhotoStorage.js";
+import type * as cleanerPhotos from "../cleanerPhotos.js";
 import type * as cleanerPortal from "../cleanerPortal.js";
 import type * as cleaners from "../cleaners.js";
 import type * as crmAi from "../crmAi.js";
@@ -85,6 +87,8 @@ declare const fullApi: ApiFromModules<{
   calendar: typeof calendar;
   chat: typeof chat;
   chatData: typeof chatData;
+  cleanerPhotoStorage: typeof cleanerPhotoStorage;
+  cleanerPhotos: typeof cleanerPhotos;
   cleanerPortal: typeof cleanerPortal;
   cleaners: typeof cleaners;
   crmAi: typeof crmAi;

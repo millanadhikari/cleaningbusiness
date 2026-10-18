@@ -1,0 +1,18 @@
+import { ClerkProvider } from '@clerk/nextjs';
+import type { ReactNode } from 'react';
+import { ConvexClientProvider } from './convex-client-provider';
+import { AiChatWidget } from '@/components/ai-chat-widget';
+
+export function ConfiguredAuthProviders({ children }: { children: ReactNode }) {
+  return (
+    <ClerkProvider
+      signInUrl="/sign-in"
+      signInFallbackRedirectUrl="/auth/continue"
+      signUpUrl="/accept-invitation"
+      signUpFallbackRedirectUrl="/admin-invitation-complete"
+      afterSignOutUrl="/sign-in"
+    >
+      <ConvexClientProvider>{children}<AiChatWidget /></ConvexClientProvider>
+    </ClerkProvider>
+  );
+}

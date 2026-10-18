@@ -1,0 +1,1324 @@
+import { v } from "convex/values";
+import { internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { requireRole } from "./lib/auth";
+
+const adminRoles = ["SUPER_ADMIN", "ADMIN"] as const;
+const GMAIL_SYNC_LEASE_MS = 10 * 60 * 1000;
+const GMAIL_SYNC_RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000] as const;
+
+type EmailAttachTarget = {
+  type: "BOOKING" | "QUOTE";
+  id: Id<"bookings"> | Id<"quoteRequests">;
+  reference: string;
+  customerName: string;
+  detail: string;
+};
+
+async function internalUser(ctx: Parameters<typeof requireRole>[0], clerkUserId: string) {
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerk_user_id", (index) => index.eq("clerkUserId", clerkUserId))
+    .unique();
+  if (!user || user.status !== "ACTIVE") throw new Error("Authentication required.");
+  return user;
+}
+
+function displayName(user: { firstName?: string; lastName?: string; email?: string }) {
+  return [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || "Admin";
+}
+
+function senderAddress(value: string) {
+  const bracketed = value.match(/<([^>]+)>/);
+  return (bracketed?.[1] ?? value).trim().toLowerCase();
+}
+
+function messagePreview(value: string) {
+  const replyStart = value.search(/\n(?:On .+ wrote:|From:|Sent:|-{2,}\s*Original Message\s*-{2,})/i);
+  const currentMessage = replyStart >= 0 ? value.slice(0, replyStart) : value;
+  const normalized = currentMessage.replace(/\s+/g, " ").trim();
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}…` : normalized;
+}
+
+export const getConnectionStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await requireRole(ctx, adminRoles);
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    return {
+      connected: Boolean(connection),
+      status: connection?.status ?? "DISCONNECTED",
+      email: user.role === "SUPER_ADMIN" ? connection?.email : undefined,
+      canManage: user.role === "SUPER_ADMIN",
+      watchStatus: connection?.watchStatus,
+      watchExpiration: connection?.watchExpiration,
+      watchUpdatedAt: connection?.watchUpdatedAt,
+      watchError: user.role === "SUPER_ADMIN" ? connection?.watchError : undefined,
+      syncStatus: connection?.gmailSyncStatus,
+      syncRetryAt: connection?.gmailSyncRetryAt,
+      syncError: user.role === "SUPER_ADMIN" ? connection?.gmailSyncLastError : undefined,
+    };
+  },
+});
+
+export const getConversation = query({
+  args: {
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+  },
+  handler: async (ctx, args) => {
+    await requireRole(ctx, adminRoles);
+    if (Boolean(args.quoteId) === Boolean(args.bookingId)) {
+      throw new Error("Select one quote or booking conversation.");
+    }
+
+    const entity = args.quoteId
+      ? await ctx.db.get(args.quoteId)
+      : args.bookingId
+        ? await ctx.db.get(args.bookingId)
+        : null;
+    if (!entity) throw new Error("Quote or booking not found.");
+    const customer = await ctx.db.get(entity.customerId);
+    if (!customer) throw new Error("Customer not found.");
+
+    let thread = args.quoteId
+      ? await ctx.db
+          .query("emailThreads")
+          .withIndex("by_quote", (index) => index.eq("quoteId", args.quoteId))
+          .first()
+      : await ctx.db
+          .query("emailThreads")
+          .withIndex("by_booking", (index) => index.eq("bookingId", args.bookingId))
+          .first();
+
+    if (!thread && args.bookingId && "quoteRequestId" in entity && entity.quoteRequestId) {
+      thread = await ctx.db
+        .query("emailThreads")
+        .withIndex("by_quote", (index) => index.eq("quoteId", entity.quoteRequestId))
+        .first();
+    }
+
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    const messages = thread
+      ? await ctx.db
+          .query("emailMessages")
+          .withIndex("by_thread", (index) => index.eq("threadId", thread!._id))
+          .order("asc")
+          .take(200)
+      : [];
+    const latestAnalysis = thread
+      ? await ctx.db
+          .query("emailAiAnalysis")
+          .withIndex("by_thread", (index) => index.eq("emailThreadId", thread!._id))
+          .order("desc")
+          .first()
+      : null;
+    const senders = new Map<string, string>();
+    await Promise.all(
+      messages.map(async (message) => {
+        if (!message.sentByUserId || senders.has(message.sentByUserId)) return;
+        const sender = await ctx.db.get(message.sentByUserId);
+        if (sender) senders.set(message.sentByUserId, displayName(sender));
+      }),
+    );
+
+    return {
+      connected: Boolean(connection),
+      recipient: customer.email,
+      movedToBookingId:
+        args.quoteId && thread?.activeContext === "BOOKING" ? thread.bookingId : undefined,
+      thread: thread
+        ? {
+            _id: thread._id,
+            bookingId: thread.bookingId,
+            quoteId: thread.quoteId,
+            subject: thread.subject,
+            status: thread.status,
+            activeContext: thread.activeContext,
+            lastMessageAt: thread.lastMessageAt,
+            unreadCount: thread.unreadCount ?? 0,
+            aiSummary: thread.aiSummary,
+            latestIntent: thread.latestIntent,
+            latestPriority: thread.latestPriority,
+            latestSuggestedAction: thread.latestSuggestedAction,
+            needsAttention: thread.needsAttention ?? false,
+            waitingSince: thread.waitingSince,
+            analysis: latestAnalysis ? {
+              _id: latestAnalysis._id,
+              status: latestAnalysis.status,
+              primaryIntent: latestAnalysis.primaryIntent,
+              secondaryIntents: latestAnalysis.secondaryIntents,
+              priority: latestAnalysis.priority,
+              requiresResponse: latestAnalysis.requiresResponse,
+              suggestedAction: latestAnalysis.suggestedAction,
+              summary: latestAnalysis.summary,
+              extractedRequestedDate: latestAnalysis.extractedRequestedDate,
+              extractedRequestedTime: latestAnalysis.extractedRequestedTime,
+              extractedReason: latestAnalysis.extractedReason,
+              confidence: latestAnalysis.confidence,
+            } : null,
+            messages: messages.map((message) => ({
+              _id: message._id,
+              direction: message.direction,
+              from: message.from,
+              to: message.to,
+              subject: message.subject,
+              bodyText: message.bodyText,
+              sentAt: message.sentAt,
+              isUnread: message.direction === "INBOUND" && !message.readAt,
+              senderName: message.sentByUserId
+                ? senders.get(message.sentByUserId) ?? "Admin"
+                : undefined,
+            })),
+          }
+        : null,
+    };
+  },
+});
+
+export const prepareConnectionManagement = internalQuery({
+  args: { clerkUserId: v.string() },
+  handler: async (ctx, { clerkUserId }) => {
+    const user = await internalUser(ctx, clerkUserId);
+    if (user.role !== "SUPER_ADMIN") throw new Error("Super Admin access required.");
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    return {
+      userId: user._id,
+      connection: connection
+        ? { id: connection._id, email: connection.email, refreshToken: connection.refreshToken }
+        : null,
+    };
+  },
+});
+
+export const storeConnection = internalMutation({
+  args: {
+    clerkUserId: v.string(),
+    email: v.string(),
+    refreshToken: v.optional(v.string()),
+    scope: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await internalUser(ctx, args.clerkUserId);
+    if (user.role !== "SUPER_ADMIN") throw new Error("Super Admin access required.");
+    const now = Date.now();
+    const activeConnections = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .collect();
+    const matching = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_email", (index) => index.eq("email", args.email))
+      .first();
+    const refreshToken = args.refreshToken ?? matching?.refreshToken;
+    if (!refreshToken) {
+      throw new Error("Google did not return a refresh token. Reconnect and grant consent again.");
+    }
+    for (const connection of activeConnections) {
+      if (connection._id !== matching?._id) {
+        await ctx.db.patch(connection._id, {
+          refreshToken: undefined,
+          status: "DISCONNECTED",
+          updatedAt: now,
+        });
+      }
+    }
+    if (matching) {
+      await ctx.db.patch(matching._id, {
+        refreshToken,
+        scope: args.scope,
+        status: "ACTIVE",
+        connectedByUserId: user._id,
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: undefined,
+        updatedAt: now,
+      });
+      return matching._id;
+    }
+    return ctx.db.insert("gmailConnections", {
+      email: args.email,
+      refreshToken,
+      scope: args.scope,
+      status: "ACTIVE",
+      connectedByUserId: user._id,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const markDisconnected = internalMutation({
+  args: { clerkUserId: v.string(), connectionId: v.id("gmailConnections") },
+  handler: async (ctx, args) => {
+    const user = await internalUser(ctx, args.clerkUserId);
+    if (user.role !== "SUPER_ADMIN") throw new Error("Super Admin access required.");
+    const connection = await ctx.db.get(args.connectionId);
+    if (connection) {
+      await ctx.db.patch(connection._id, {
+        refreshToken: undefined,
+        status: "DISCONNECTED",
+        watchStatus: undefined,
+        watchExpiration: undefined,
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: undefined,
+        updatedAt: Date.now(),
+      });
+    }
+    return null;
+  },
+});
+
+export const markProviderDisconnected = internalMutation({
+  args: { connectionId: v.id("gmailConnections") },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (connection) {
+      await ctx.db.patch(connection._id, {
+        refreshToken: undefined,
+        status: "DISCONNECTED",
+        watchStatus: undefined,
+        watchExpiration: undefined,
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: undefined,
+        updatedAt: Date.now(),
+      });
+    }
+    return null;
+  },
+});
+
+export const prepareSend = internalQuery({
+  args: {
+    clerkUserId: v.string(),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    to: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await internalUser(ctx, args.clerkUserId);
+    if (user.role !== "SUPER_ADMIN" && user.role !== "ADMIN") {
+      throw new Error("Admin access required.");
+    }
+    if (Boolean(args.quoteId) === Boolean(args.bookingId)) {
+      throw new Error("Select one quote or booking conversation.");
+    }
+    const entity = args.quoteId
+      ? await ctx.db.get(args.quoteId)
+      : args.bookingId
+        ? await ctx.db.get(args.bookingId)
+        : null;
+    if (!entity) throw new Error("Quote or booking not found.");
+    const customer = await ctx.db.get(entity.customerId);
+    if (!customer?.email) throw new Error("Add a customer email before sending.");
+    if (customer.email.trim().toLowerCase() !== args.to.trim().toLowerCase()) {
+      throw new Error("The recipient must match the customer on this record.");
+    }
+    let thread = args.quoteId
+      ? await ctx.db
+          .query("emailThreads")
+          .withIndex("by_quote", (index) => index.eq("quoteId", args.quoteId))
+          .first()
+      : await ctx.db
+          .query("emailThreads")
+          .withIndex("by_booking", (index) => index.eq("bookingId", args.bookingId))
+          .first();
+    if (!thread && args.bookingId && "quoteRequestId" in entity && entity.quoteRequestId) {
+      thread = await ctx.db
+        .query("emailThreads")
+        .withIndex("by_quote", (index) => index.eq("quoteId", entity.quoteRequestId))
+        .first();
+    }
+    if (args.quoteId && thread?.activeContext === "BOOKING") {
+      throw new Error("This conversation has moved to the booking.");
+    }
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    if (!connection?.refreshToken) throw new Error("Company Gmail is not connected.");
+    const messages = thread
+      ? await ctx.db
+          .query("emailMessages")
+          .withIndex("by_thread", (index) => index.eq("threadId", thread!._id))
+          .order("desc")
+          .take(50)
+      : [];
+    return {
+      userId: user._id,
+      senderName: displayName(user),
+      customerId: customer._id,
+      connectionId: connection._id,
+      connectedEmail: connection.email,
+      refreshToken: connection.refreshToken,
+      gmailThreadId: thread?.gmailThreadId,
+      existingSubject: thread?.subject,
+      replyToMessageId: messages.find((message) => message.rfcMessageId)?.rfcMessageId,
+    };
+  },
+});
+
+export const recordSentMessage = internalMutation({
+  args: {
+    clerkUserId: v.string(),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+    customerId: v.id("customers"),
+    gmailThreadId: v.string(),
+    gmailMessageId: v.string(),
+    rfcMessageId: v.string(),
+    from: v.string(),
+    to: v.string(),
+    subject: v.string(),
+    bodyText: v.string(),
+    sentAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await internalUser(ctx, args.clerkUserId);
+    if (user.role !== "SUPER_ADMIN" && user.role !== "ADMIN") {
+      throw new Error("Admin access required.");
+    }
+    if (Boolean(args.quoteId) === Boolean(args.bookingId)) {
+      throw new Error("Select one quote or booking conversation.");
+    }
+    const entity = args.quoteId
+      ? await ctx.db.get(args.quoteId)
+      : args.bookingId
+        ? await ctx.db.get(args.bookingId)
+        : null;
+    if (!entity || entity.customerId !== args.customerId) {
+      throw new Error("Conversation record mismatch.");
+    }
+    const linkedQuoteId = args.quoteId ??
+      (args.bookingId && "quoteRequestId" in entity ? entity.quoteRequestId : undefined);
+    let thread = args.quoteId
+      ? await ctx.db
+          .query("emailThreads")
+          .withIndex("by_quote", (index) => index.eq("quoteId", args.quoteId))
+          .first()
+      : await ctx.db
+          .query("emailThreads")
+          .withIndex("by_booking", (index) => index.eq("bookingId", args.bookingId))
+          .first();
+    if (!thread && args.bookingId && "quoteRequestId" in entity && entity.quoteRequestId) {
+      thread = await ctx.db
+        .query("emailThreads")
+        .withIndex("by_quote", (index) => index.eq("quoteId", entity.quoteRequestId))
+        .first();
+    }
+    const now = Date.now();
+    const threadId = thread?._id ??
+      (await ctx.db.insert("emailThreads", {
+        customerId: args.customerId,
+        quoteId: linkedQuoteId,
+        bookingId: args.bookingId,
+        activeContext: args.bookingId ? "BOOKING" : "QUOTE",
+        gmailThreadId: args.gmailThreadId,
+        subject: args.subject,
+        status: "WAITING_CUSTOMER",
+        needsAttention: false,
+        waitingSince: now,
+        unreadCount: 0,
+        lastMessageAt: args.sentAt,
+        createdAt: now,
+        updatedAt: now,
+      }));
+    if (thread) {
+      await ctx.db.patch(thread._id, {
+        quoteId: linkedQuoteId ?? thread.quoteId,
+        bookingId: args.bookingId ?? thread.bookingId,
+        activeContext: args.bookingId ? "BOOKING" : thread.activeContext,
+        gmailThreadId: args.gmailThreadId,
+        status: "WAITING_CUSTOMER",
+        needsAttention: false,
+        waitingSince: now,
+        lastMessageAt: args.sentAt,
+        updatedAt: now,
+      });
+    }
+    await ctx.db.insert("emailMessages", {
+      threadId,
+      gmailMessageId: args.gmailMessageId,
+      rfcMessageId: args.rfcMessageId,
+      direction: "OUTBOUND",
+      from: args.from,
+      to: args.to,
+      subject: args.subject,
+      bodyText: args.bodyText,
+      sentByUserId: user._id,
+      sentAt: args.sentAt,
+      createdAt: now,
+    });
+    return threadId;
+  },
+});
+
+function messageIds(value: string | undefined) {
+  if (!value) return [];
+  const bracketed = value.match(/<[^>]+>/g);
+  if (bracketed?.length) return bracketed.map((item) => item.trim());
+  return value
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function historyIdIsAfter(candidate: string, current: string | undefined) {
+  if (!current) return true;
+  const cleanCandidate = candidate.replace(/^0+/, "") || "0";
+  const cleanCurrent = current.replace(/^0+/, "") || "0";
+  return cleanCandidate.length > cleanCurrent.length ||
+    (cleanCandidate.length === cleanCurrent.length && cleanCandidate > cleanCurrent);
+}
+
+async function threadForBooking(ctx: MutationCtx, booking: Doc<"bookings">) {
+  let thread = await ctx.db
+    .query("emailThreads")
+    .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
+    .first();
+  if (!thread && booking.quoteRequestId) {
+    thread = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_quote", (index) => index.eq("quoteId", booking.quoteRequestId))
+      .first();
+  }
+  return thread;
+}
+
+async function targetFromSubject(ctx: MutationCtx, subject: string) {
+  const references = [...new Set((subject.match(/\bWD\d{4,}\b/gi) ?? []).map((value) => value.toUpperCase()))];
+  for (const reference of references) {
+    const booking = await ctx.db
+      .query("bookings")
+      .withIndex("by_reference", (index) => index.eq("reference", reference))
+      .first();
+    if (booking) {
+      return {
+        thread: await threadForBooking(ctx, booking),
+        customerId: booking.customerId,
+        quoteId: booking.quoteRequestId,
+        bookingId: booking._id,
+        activeContext: "BOOKING" as const,
+      };
+    }
+
+    const quote = await ctx.db
+      .query("quoteRequests")
+      .withIndex("by_reference", (index) => index.eq("reference", reference))
+      .first();
+    if (!quote) continue;
+    if (quote.convertedBookingId) {
+      const convertedBooking = await ctx.db.get(quote.convertedBookingId);
+      if (convertedBooking) {
+        return {
+          thread: await threadForBooking(ctx, convertedBooking),
+          customerId: convertedBooking.customerId,
+          quoteId: quote._id,
+          bookingId: convertedBooking._id,
+          activeContext: "BOOKING" as const,
+        };
+      }
+    }
+    return {
+      thread: await ctx.db
+        .query("emailThreads")
+        .withIndex("by_quote", (index) => index.eq("quoteId", quote._id))
+        .first(),
+      customerId: quote.customerId,
+      quoteId: quote._id,
+      bookingId: undefined,
+      activeContext: "QUOTE" as const,
+    };
+  }
+  return null;
+}
+
+async function threadFromReplyHeaders(
+  ctx: MutationCtx,
+  inReplyTo: string | undefined,
+  references: string[],
+) {
+  const identifiers = [...new Set([...messageIds(inReplyTo), ...references.flatMap(messageIds)])];
+  for (const identifier of identifiers) {
+    const message = await ctx.db
+      .query("emailMessages")
+      .withIndex("by_rfc_message", (index) => index.eq("rfcMessageId", identifier))
+      .first();
+    if (message?.direction === "OUTBOUND") {
+      const thread = await ctx.db.get(message.threadId);
+      if (thread) return thread;
+    }
+  }
+  return null;
+}
+
+const inboundMessageArgs = {
+  gmailMessageId: v.string(),
+  gmailThreadId: v.string(),
+  rfcMessageId: v.optional(v.string()),
+  inReplyTo: v.optional(v.string()),
+  references: v.array(v.string()),
+  from: v.string(),
+  to: v.string(),
+  subject: v.string(),
+  bodyText: v.string(),
+  bodyHtml: v.optional(v.string()),
+  sentAt: v.number(),
+};
+
+export const getActiveConnection = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    if (!connection?.refreshToken) return null;
+    return {
+      id: connection._id,
+      email: connection.email,
+      refreshToken: connection.refreshToken,
+      gmailHistoryId: connection.gmailHistoryId,
+      watchExpiration: connection.watchExpiration,
+      watchStatus: connection.watchStatus,
+    };
+  },
+});
+
+export const updateWatchState = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    gmailHistoryId: v.string(),
+    watchExpiration: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (!connection || connection.status !== "ACTIVE") return null;
+    const now = Date.now();
+    await ctx.db.patch(connection._id, {
+      // A renewed watch returns Gmail's current history ID, not a cursor that we
+      // have successfully ingested. Only initialize the cursor for a new
+      // connection; normal sync completion advances it.
+      gmailHistoryId: connection.gmailHistoryId ?? args.gmailHistoryId,
+      watchExpiration: args.watchExpiration,
+      watchUpdatedAt: now,
+      watchStatus: "ACTIVE",
+      watchError: undefined,
+      updatedAt: now,
+    });
+    return null;
+  },
+});
+
+export const setWatchError = internalMutation({
+  args: { connectionId: v.id("gmailConnections"), message: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (!connection || connection.status !== "ACTIVE") return null;
+    const now = Date.now();
+    await ctx.db.patch(connection._id, {
+      watchStatus: "ERROR",
+      watchError: args.message.slice(0, 300),
+      watchUpdatedAt: now,
+      updatedAt: now,
+    });
+    return null;
+  },
+});
+
+export const advanceHistoryId = internalMutation({
+  args: { connectionId: v.id("gmailConnections"), gmailHistoryId: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (!connection || connection.status !== "ACTIVE") return null;
+    if (historyIdIsAfter(args.gmailHistoryId, connection.gmailHistoryId)) {
+      await ctx.db.patch(connection._id, {
+        gmailHistoryId: args.gmailHistoryId,
+        updatedAt: Date.now(),
+      });
+    }
+    return null;
+  },
+});
+
+export const enqueueHistoryNotification = internalMutation({
+  args: { emailAddress: v.string(), historyId: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db
+      .query("gmailConnections")
+      .withIndex("by_status", (index) => index.eq("status", "ACTIVE"))
+      .first();
+    if (!connection?.refreshToken) return { scheduled: false, reason: "not_connected" as const };
+    if (args.emailAddress.trim().toLowerCase() !== connection.email.trim().toLowerCase()) {
+      return { scheduled: false, reason: "mailbox_mismatch" as const };
+    }
+    if (!historyIdIsAfter(args.historyId, connection.gmailHistoryId)) {
+      return { scheduled: false, reason: "stale" as const };
+    }
+
+    const pendingHistoryId = historyIdIsAfter(args.historyId, connection.gmailPendingHistoryId)
+      ? args.historyId
+      : connection.gmailPendingHistoryId;
+    const now = Date.now();
+    const runningWithLease = connection.gmailSyncStatus === "RUNNING" &&
+      (connection.gmailSyncLeaseUntil ?? 0) > now;
+    const alreadyScheduled = connection.gmailSyncStatus === "PENDING" || runningWithLease;
+    const sameFailedTarget = connection.gmailSyncStatus === "ERROR" &&
+      !historyIdIsAfter(args.historyId, connection.gmailPendingHistoryId);
+
+    if (alreadyScheduled || sameFailedTarget) {
+      if (pendingHistoryId !== connection.gmailPendingHistoryId) {
+        await ctx.db.patch(connection._id, {
+          gmailPendingHistoryId: pendingHistoryId,
+          gmailSyncUpdatedAt: now,
+          updatedAt: now,
+        });
+      }
+      return {
+        scheduled: false,
+        reason: sameFailedTarget ? "retry_exhausted" as const : "coalesced" as const,
+      };
+    }
+
+    await ctx.db.patch(connection._id, {
+      gmailPendingHistoryId: pendingHistoryId,
+      gmailSyncStatus: "PENDING",
+      gmailSyncLeaseToken: undefined,
+      gmailSyncLeaseUntil: undefined,
+      gmailSyncAttempts: 0,
+      gmailSyncRetryAt: undefined,
+      gmailSyncLastError: undefined,
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.gmailActions.processPendingHistory, {
+      connectionId: connection._id,
+    });
+    return { scheduled: true, reason: "queued" as const };
+  },
+});
+
+export const beginHistoryProcessing = internalMutation({
+  args: { connectionId: v.id("gmailConnections"), leaseToken: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (!connection?.refreshToken || connection.status !== "ACTIVE") return null;
+    if (connection.gmailSyncStatus !== "PENDING") return null;
+    if (
+      !connection.gmailPendingHistoryId ||
+      !historyIdIsAfter(connection.gmailPendingHistoryId, connection.gmailHistoryId)
+    ) {
+      const now = Date.now();
+      await ctx.db.patch(connection._id, {
+        gmailPendingHistoryId: undefined,
+        gmailSyncStatus: undefined,
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: undefined,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: undefined,
+        gmailSyncUpdatedAt: now,
+        updatedAt: now,
+      });
+      return null;
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(connection._id, {
+      gmailSyncStatus: "RUNNING",
+      gmailSyncLeaseToken: args.leaseToken,
+      gmailSyncLeaseUntil: now + GMAIL_SYNC_LEASE_MS,
+      gmailSyncRetryAt: undefined,
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    return {
+      email: connection.email,
+      refreshToken: connection.refreshToken,
+      startHistoryId: connection.gmailHistoryId,
+      targetHistoryId: connection.gmailPendingHistoryId,
+    };
+  },
+});
+
+export const completeHistoryProcessing = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    leaseToken: v.string(),
+    gmailHistoryId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (
+      !connection ||
+      connection.status !== "ACTIVE" ||
+      connection.gmailSyncLeaseToken !== args.leaseToken
+    ) {
+      return { accepted: false, scheduled: false };
+    }
+
+    const completedHistoryId = historyIdIsAfter(args.gmailHistoryId, connection.gmailHistoryId)
+      ? args.gmailHistoryId
+      : connection.gmailHistoryId;
+    const hasMore = Boolean(
+      connection.gmailPendingHistoryId &&
+      historyIdIsAfter(connection.gmailPendingHistoryId, completedHistoryId),
+    );
+    const now = Date.now();
+    await ctx.db.patch(connection._id, {
+      gmailHistoryId: completedHistoryId,
+      gmailPendingHistoryId: hasMore ? connection.gmailPendingHistoryId : undefined,
+      gmailSyncStatus: hasMore ? "PENDING" : undefined,
+      gmailSyncLeaseToken: undefined,
+      gmailSyncLeaseUntil: undefined,
+      gmailSyncAttempts: hasMore ? 0 : undefined,
+      gmailSyncRetryAt: undefined,
+      gmailSyncLastError: undefined,
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    if (hasMore) {
+      await ctx.scheduler.runAfter(0, internal.gmailActions.processPendingHistory, {
+        connectionId: connection._id,
+      });
+    }
+    return { accepted: true, scheduled: hasMore };
+  },
+});
+
+export const failHistoryProcessing = internalMutation({
+  args: {
+    connectionId: v.id("gmailConnections"),
+    leaseToken: v.string(),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.connectionId);
+    if (
+      !connection ||
+      connection.status !== "ACTIVE" ||
+      connection.gmailSyncLeaseToken !== args.leaseToken
+    ) {
+      return { accepted: false, scheduled: false };
+    }
+
+    const attempts = (connection.gmailSyncAttempts ?? 0) + 1;
+    const delay = GMAIL_SYNC_RETRY_DELAYS_MS[attempts - 1];
+    const now = Date.now();
+    if (delay === undefined) {
+      await ctx.db.patch(connection._id, {
+        gmailSyncStatus: "ERROR",
+        gmailSyncLeaseToken: undefined,
+        gmailSyncLeaseUntil: undefined,
+        gmailSyncAttempts: attempts,
+        gmailSyncRetryAt: undefined,
+        gmailSyncLastError: args.message.slice(0, 300),
+        gmailSyncUpdatedAt: now,
+        updatedAt: now,
+      });
+      return { accepted: true, scheduled: false };
+    }
+
+    const retryAt = now + delay;
+    await ctx.db.patch(connection._id, {
+      gmailSyncStatus: "PENDING",
+      gmailSyncLeaseToken: undefined,
+      gmailSyncLeaseUntil: undefined,
+      gmailSyncAttempts: attempts,
+      gmailSyncRetryAt: retryAt,
+      gmailSyncLastError: args.message.slice(0, 300),
+      gmailSyncUpdatedAt: now,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(delay, internal.gmailActions.processPendingHistory, {
+      connectionId: connection._id,
+    });
+    return { accepted: true, scheduled: true, retryAt };
+  },
+});
+
+export const storeInboundMessage = internalMutation({
+  args: inboundMessageArgs,
+  handler: async (ctx, args) => {
+    const existingMessage = await ctx.db
+      .query("emailMessages")
+      .withIndex("by_gmail_message", (index) => index.eq("gmailMessageId", args.gmailMessageId))
+      .first();
+    if (existingMessage) return { result: "duplicate" as const, threadId: existingMessage.threadId };
+    const existingUnmatched = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_message", (index) => index.eq("gmailMessageId", args.gmailMessageId))
+      .first();
+    if (existingUnmatched) return { result: "duplicate" as const, threadId: undefined };
+
+    let thread = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", args.gmailThreadId))
+      .first();
+    if (!thread) {
+      thread = await threadFromReplyHeaders(ctx, args.inReplyTo, args.references);
+    }
+
+    let subjectTarget: Awaited<ReturnType<typeof targetFromSubject>> = null;
+    if (!thread) {
+      subjectTarget = await targetFromSubject(ctx, args.subject);
+      thread = subjectTarget?.thread ?? null;
+    }
+
+    if (!thread && subjectTarget) {
+      const now = Date.now();
+      const threadId = await ctx.db.insert("emailThreads", {
+        customerId: subjectTarget.customerId,
+        quoteId: subjectTarget.quoteId,
+        bookingId: subjectTarget.bookingId,
+        activeContext: subjectTarget.activeContext,
+        gmailThreadId: args.gmailThreadId,
+        subject: args.subject,
+        status: "WAITING_STAFF",
+        unreadCount: 0,
+        lastMessageAt: args.sentAt,
+        createdAt: now,
+        updatedAt: now,
+      });
+      thread = await ctx.db.get(threadId);
+    }
+
+    if (!thread) {
+      await ctx.db.insert("unmatchedEmailMessages", {
+        ...args,
+        receivedAt: Date.now(),
+      });
+      return { result: "unmatched" as const, threadId: undefined };
+    }
+
+    const now = Date.now();
+    const inboundMessageId = await ctx.db.insert("emailMessages", {
+      threadId: thread._id,
+      gmailMessageId: args.gmailMessageId,
+      rfcMessageId: args.rfcMessageId,
+      direction: "INBOUND",
+      from: args.from,
+      to: args.to,
+      subject: args.subject,
+      bodyText: args.bodyText,
+      bodyHtml: args.bodyHtml,
+      sentAt: args.sentAt,
+      createdAt: now,
+    });
+    await ctx.db.insert("emailAiAnalysis", {
+      emailMessageId: inboundMessageId, emailThreadId: thread._id, customerId: thread.customerId,
+      quoteId: thread.quoteId, bookingId: thread.bookingId, primaryIntent: "OTHER", priority: "NORMAL",
+      requiresResponse: true, summary: "Analysis queued.", status: "PENDING", createdAt: now, updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: inboundMessageId });
+
+    const priorUnmatched = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", args.gmailThreadId))
+      .collect();
+    for (const message of priorUnmatched) {
+      const duplicate = await ctx.db
+        .query("emailMessages")
+        .withIndex("by_gmail_message", (index) => index.eq("gmailMessageId", message.gmailMessageId))
+        .first();
+      if (!duplicate) {
+        const recoveredMessageId = await ctx.db.insert("emailMessages", {
+          threadId: thread._id,
+          gmailMessageId: message.gmailMessageId,
+          rfcMessageId: message.rfcMessageId,
+          direction: "INBOUND",
+          from: message.from,
+          to: message.to,
+          subject: message.subject,
+          bodyText: message.bodyText,
+          bodyHtml: message.bodyHtml,
+          sentAt: message.sentAt,
+          createdAt: message.receivedAt,
+        });
+        await ctx.db.insert("emailAiAnalysis", {
+          emailMessageId: recoveredMessageId, emailThreadId: thread._id, customerId: thread.customerId,
+          quoteId: thread.quoteId, bookingId: thread.bookingId, primaryIntent: "OTHER", priority: "NORMAL",
+          requiresResponse: true, summary: "Analysis queued.", status: "PENDING", createdAt: message.receivedAt, updatedAt: now,
+        });
+        await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: recoveredMessageId });
+      }
+      await ctx.db.delete(message._id);
+    }
+
+    await ctx.db.patch(thread._id, {
+      gmailThreadId: args.gmailThreadId,
+      status: "WAITING_STAFF",
+      needsAttention: true,
+      waitingSince: thread.status === "WAITING_STAFF" ? (thread.waitingSince ?? now) : now,
+      unreadCount: (thread.unreadCount ?? 0) + 1 + priorUnmatched.length,
+      lastMessageAt: Math.max(thread.lastMessageAt, args.sentAt, ...priorUnmatched.map((item) => item.sentAt)),
+      updatedAt: now,
+    });
+    return { result: "attached" as const, threadId: thread._id };
+  },
+});
+
+export const markConversationRead = mutation({
+  args: {
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+  },
+  handler: async (ctx, args) => {
+    await requireRole(ctx, adminRoles);
+    if (Boolean(args.quoteId) === Boolean(args.bookingId)) {
+      throw new Error("Select one quote or booking conversation.");
+    }
+    let thread = args.quoteId
+      ? await ctx.db.query("emailThreads").withIndex("by_quote", (index) => index.eq("quoteId", args.quoteId)).first()
+      : await ctx.db.query("emailThreads").withIndex("by_booking", (index) => index.eq("bookingId", args.bookingId)).first();
+    if (!thread && args.bookingId) {
+      const booking = await ctx.db.get(args.bookingId);
+      if (booking?.quoteRequestId) {
+        thread = await ctx.db.query("emailThreads").withIndex("by_quote", (index) => index.eq("quoteId", booking.quoteRequestId)).first();
+      }
+    }
+    if (!thread) return null;
+    const unreadMessages = await ctx.db
+      .query("emailMessages")
+      .withIndex("by_thread", (index) => index.eq("threadId", thread!._id))
+      .collect();
+    const now = Date.now();
+    for (const message of unreadMessages) {
+      if (message.direction === "INBOUND" && !message.readAt) {
+        await ctx.db.patch(message._id, { readAt: now });
+      }
+    }
+    await ctx.db.patch(thread._id, { unreadCount: 0, updatedAt: now });
+    return null;
+  },
+});
+
+export const getUnmatchedInbox = query({
+  args: { dismissed: v.boolean() },
+  handler: async (ctx, { dismissed }) => {
+    await requireRole(ctx, adminRoles);
+    const [messages, pendingRows, dismissedRows, quotes, bookings] = await Promise.all([
+      dismissed
+        ? ctx.db
+            .query("unmatchedEmailMessages")
+            .withIndex("by_dismissed_received_at", (index) => index.gt("dismissedAt", 0))
+            .order("desc")
+            .take(250)
+        : ctx.db
+            .query("unmatchedEmailMessages")
+            .withIndex("by_dismissed_received_at", (index) => index.eq("dismissedAt", undefined))
+            .order("desc")
+            .take(250),
+      ctx.db
+        .query("unmatchedEmailMessages")
+        .withIndex("by_dismissed_received_at", (index) => index.eq("dismissedAt", undefined))
+        .take(201),
+      ctx.db
+        .query("unmatchedEmailMessages")
+        .withIndex("by_dismissed_received_at", (index) => index.gt("dismissedAt", 0))
+        .take(201),
+      ctx.db.query("quoteRequests").withIndex("by_created_at").order("desc").take(100),
+      ctx.db.query("bookings").withIndex("by_created_at").order("desc").take(100),
+    ]);
+    const senderEmails = [...new Set(messages.map((message) => senderAddress(message.from)).filter(Boolean))];
+    const matchedCustomers = await Promise.all(senderEmails.map((email) =>
+      ctx.db.query("customers").withIndex("by_email", (index) => index.eq("email", email)).first()
+    ));
+    const customersByEmail = new Map(
+      matchedCustomers.flatMap((customer) => customer?.email
+        ? [[customer.email.toLowerCase(), customer] as const]
+        : []),
+    );
+    const customerIds = new Set<Id<"customers">>([
+      ...quotes.map((item) => item.customerId),
+      ...bookings.map((item) => item.customerId),
+    ]);
+    const customers = new Map<Id<"customers">, Doc<"customers">>();
+    await Promise.all([...customerIds].map(async (id) => {
+      const customer = await ctx.db.get(id);
+      if (customer) customers.set(id, customer);
+    }));
+    const labelFor = (customerId: Id<"customers">) => {
+      const customer = customers.get(customerId);
+      return customer
+        ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
+        : "Unknown customer";
+    };
+    const grouped = new Map<string, typeof messages>();
+    for (const message of messages) {
+      grouped.set(message.gmailThreadId, [...(grouped.get(message.gmailThreadId) ?? []), message]);
+    }
+    return {
+      pendingCount: pendingRows.length,
+      pendingCountCapped: pendingRows.length > 200,
+      dismissedCount: dismissedRows.length,
+      dismissedCountCapped: dismissedRows.length > 200,
+      threads: [...grouped.entries()]
+        .map(([gmailThreadId, threadMessages]) => {
+          const ordered = threadMessages.sort((a, b) => a.sentAt - b.sentAt);
+          const latest = ordered.at(-1)!;
+          const customer = ordered
+            .map((message) => customersByEmail.get(senderAddress(message.from)))
+            .find(Boolean);
+          return {
+            gmailThreadId,
+            latestAt: latest.sentAt,
+            messageCount: ordered.length,
+            firstMessageId: ordered[0]._id,
+            subject: latest.subject,
+            from: latest.from,
+            preview: messagePreview(latest.bodyText),
+            likelyCustomer: Boolean(customer),
+            customerName: customer
+              ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
+              : undefined,
+          };
+        })
+        .sort((a, b) => b.latestAt - a.latestAt),
+      targets: [
+        ...bookings.map((booking) => ({
+          type: "BOOKING" as const,
+          id: booking._id,
+          reference: booking.reference ?? String(booking._id),
+          customerName: labelFor(booking.customerId),
+          detail: [booking.addressLine1, booking.suburb].filter(Boolean).join(", "),
+        })),
+        ...quotes.map((quote) => ({
+          type: "QUOTE" as const,
+          id: quote._id,
+          reference: quote.reference ?? String(quote._id),
+          customerName: labelFor(quote.customerId),
+          detail: [quote.addressLine1, quote.suburb].filter(Boolean).join(", "),
+        })),
+      ],
+    };
+  },
+});
+
+export const getUnmatchedThread = query({
+  args: { gmailThreadId: v.string() },
+  handler: async (ctx, { gmailThreadId }) => {
+    await requireRole(ctx, adminRoles);
+    const messages = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", gmailThreadId))
+      .collect();
+    return messages
+      .sort((a, b) => a.sentAt - b.sentAt)
+      .map((message) => ({
+        _id: message._id,
+        from: message.from,
+        subject: message.subject,
+        bodyText: message.bodyText,
+        sentAt: message.sentAt,
+      }));
+  },
+});
+
+export const setUnmatchedThreadDismissed = mutation({
+  args: { gmailThreadId: v.string(), dismissed: v.boolean() },
+  handler: async (ctx, { gmailThreadId, dismissed }) => {
+    const user = await requireRole(ctx, adminRoles);
+    const messages = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", gmailThreadId))
+      .collect();
+    const dismissedAt = dismissed ? Date.now() : undefined;
+    await Promise.all(messages.map((message) => ctx.db.patch(message._id, {
+      dismissedAt,
+      dismissedByUserId: dismissed ? user._id : undefined,
+    })));
+    return { updated: messages.length };
+  },
+});
+
+export const getUnmatchedCount = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireRole(ctx, adminRoles);
+    return (await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_dismissed_received_at", (index) => index.eq("dismissedAt", undefined))
+      .take(201)).length;
+  },
+});
+
+export const findEmailAttachTargets = query({
+  args: { reference: v.string() },
+  handler: async (ctx, { reference }): Promise<EmailAttachTarget[]> => {
+    await requireRole(ctx, adminRoles);
+    const normalized = reference.trim().toUpperCase();
+    if (!/^WD\d{4,}$/.test(normalized)) return [];
+    const [booking, quote] = await Promise.all([
+      ctx.db.query("bookings").withIndex("by_reference", (index) => index.eq("reference", normalized)).first(),
+      ctx.db.query("quoteRequests").withIndex("by_reference", (index) => index.eq("reference", normalized)).first(),
+    ]);
+    const results: EmailAttachTarget[] = [];
+    if (booking) {
+      const customer = await ctx.db.get(booking.customerId);
+      results.push({
+        type: "BOOKING",
+        id: booking._id,
+        reference: booking.reference ?? normalized,
+        customerName: customer ? [customer.firstName, customer.lastName].filter(Boolean).join(" ") : "Unknown customer",
+        detail: [booking.addressLine1, booking.suburb].filter(Boolean).join(", "),
+      });
+    }
+    if (quote && !quote.convertedBookingId) {
+      const customer = await ctx.db.get(quote.customerId);
+      results.push({
+        type: "QUOTE",
+        id: quote._id,
+        reference: quote.reference ?? normalized,
+        customerName: customer ? [customer.firstName, customer.lastName].filter(Boolean).join(" ") : "Unknown customer",
+        detail: [quote.addressLine1, quote.suburb].filter(Boolean).join(", "),
+      });
+    }
+    return results;
+  },
+});
+
+export const attachUnmatchedThread = mutation({
+  args: {
+    unmatchedMessageId: v.id("unmatchedEmailMessages"),
+    quoteId: v.optional(v.id("quoteRequests")),
+    bookingId: v.optional(v.id("bookings")),
+  },
+  handler: async (ctx, args) => {
+    await requireRole(ctx, adminRoles);
+    if (Boolean(args.quoteId) === Boolean(args.bookingId)) {
+      throw new Error("Choose one quote or booking.");
+    }
+    const selected = await ctx.db.get(args.unmatchedMessageId);
+    if (!selected) return null;
+
+    let customerId: Id<"customers">;
+    let quoteId = args.quoteId;
+    let bookingId = args.bookingId;
+    let activeContext: "QUOTE" | "BOOKING";
+    let thread: Doc<"emailThreads"> | null = null;
+    if (bookingId) {
+      const booking = await ctx.db.get(bookingId);
+      if (!booking) throw new Error("Booking not found.");
+      customerId = booking.customerId;
+      quoteId = booking.quoteRequestId;
+      activeContext = "BOOKING";
+      thread = await threadForBooking(ctx, booking);
+    } else {
+      const quote = await ctx.db.get(quoteId!);
+      if (!quote) throw new Error("Quote not found.");
+      if (quote.convertedBookingId) {
+        const booking = await ctx.db.get(quote.convertedBookingId);
+        if (!booking) throw new Error("Converted booking not found.");
+        customerId = booking.customerId;
+        bookingId = booking._id;
+        activeContext = "BOOKING";
+        thread = await threadForBooking(ctx, booking);
+      } else {
+        customerId = quote.customerId;
+        activeContext = "QUOTE";
+        thread = await ctx.db.query("emailThreads").withIndex("by_quote", (index) => index.eq("quoteId", quote._id)).first();
+      }
+    }
+
+    const alreadyLinked = await ctx.db
+      .query("emailThreads")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", selected.gmailThreadId))
+      .first();
+    if (alreadyLinked && alreadyLinked._id !== thread?._id) {
+      throw new Error("This Gmail thread is already attached to another conversation.");
+    }
+
+    const now = Date.now();
+    const threadId = thread?._id ?? await ctx.db.insert("emailThreads", {
+      customerId,
+      quoteId,
+      bookingId,
+      activeContext,
+      gmailThreadId: selected.gmailThreadId,
+      subject: selected.subject,
+      status: "WAITING_STAFF",
+      unreadCount: 0,
+      lastMessageAt: selected.sentAt,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const unmatched = await ctx.db
+      .query("unmatchedEmailMessages")
+      .withIndex("by_gmail_thread", (index) => index.eq("gmailThreadId", selected.gmailThreadId))
+      .collect();
+    let inserted = 0;
+    for (const message of unmatched) {
+      const duplicate = await ctx.db
+        .query("emailMessages")
+        .withIndex("by_gmail_message", (index) => index.eq("gmailMessageId", message.gmailMessageId))
+        .first();
+      if (!duplicate) {
+        const attachedMessageId = await ctx.db.insert("emailMessages", {
+          threadId,
+          gmailMessageId: message.gmailMessageId,
+          rfcMessageId: message.rfcMessageId,
+          direction: "INBOUND",
+          from: message.from,
+          to: message.to,
+          subject: message.subject,
+          bodyText: message.bodyText,
+          bodyHtml: message.bodyHtml,
+          sentAt: message.sentAt,
+          createdAt: message.receivedAt,
+        });
+        await ctx.db.insert("emailAiAnalysis", {
+          emailMessageId: attachedMessageId, emailThreadId: threadId, customerId, quoteId, bookingId,
+          primaryIntent: "OTHER", priority: "NORMAL", requiresResponse: true, summary: "Analysis queued.",
+          status: "PENDING", createdAt: message.receivedAt, updatedAt: now,
+        });
+        await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: attachedMessageId });
+        inserted += 1;
+      }
+      await ctx.db.delete(message._id);
+    }
+    const latestAt = Math.max(selected.sentAt, ...unmatched.map((message) => message.sentAt));
+    const currentThread = await ctx.db.get(threadId);
+    await ctx.db.patch(threadId, {
+      quoteId,
+      bookingId,
+      activeContext,
+      gmailThreadId: selected.gmailThreadId,
+      status: "WAITING_STAFF",
+      needsAttention: true,
+      waitingSince: currentThread?.status === "WAITING_STAFF" ? (currentThread.waitingSince ?? now) : now,
+      unreadCount: (currentThread?.unreadCount ?? 0) + inserted,
+      lastMessageAt: Math.max(currentThread?.lastMessageAt ?? 0, latestAt),
+      updatedAt: now,
+    });
+    return { threadId, bookingId, quoteId };
+  },
+});

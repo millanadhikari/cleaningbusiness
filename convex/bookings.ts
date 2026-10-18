@@ -1,0 +1,936 @@
+import { v } from "convex/values";
+import { internal } from "./_generated/api";
+import { mutation, query, type MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import { requireRole } from "./lib/auth";
+import { allocateWorkReference } from "./lib/workReferences";
+import { calculateEstimateForService } from "./services";
+import { ensurePublicSlotAvailable } from "./availability";
+import { assessPostcode } from "./serviceAreas";
+import { linkWebsiteBooking, linkWebsiteQuote } from "./lib/websiteAnalytics";
+
+const answerValue = v.union(
+  v.number(),
+  v.boolean(),
+  v.string(),
+  v.array(v.string()),
+);
+const paymentOption = v.union(
+  v.literal("DEPOSIT"),
+  v.literal("FULL"),
+  v.literal("PAY_LATER"),
+);
+
+const noteKind = v.union(v.literal("ADMIN_NOTE"), v.literal("JOB_NOTE"));
+
+function cleanerJobUrl(appOrigin: string, bookingId: string) {
+  let origin: URL;
+  try {
+    origin = new URL(appOrigin);
+  } catch {
+    throw new Error("The application URL is invalid.");
+  }
+  const isAllowed = origin.hostname === "app.wedocleaning.com.au" ||
+    origin.hostname.endsWith(".vercel.app") ||
+    origin.hostname === "localhost" ||
+    origin.hostname === "127.0.0.1";
+  const safeProtocol = origin.protocol === "https:" ||
+    ((origin.hostname === "localhost" || origin.hostname === "127.0.0.1") && origin.protocol === "http:");
+  if (!isAllowed || !safeProtocol) throw new Error("The application URL is not approved.");
+  return new URL(`/cleaner/jobs/${bookingId}`, origin.origin).toString();
+}
+
+function validatePhotoUrls(values: string[] | undefined) {
+  if (!values?.length) return undefined;
+  if (values.length > 8) throw new Error("Add no more than eight photo links.");
+  return values.map((value) => {
+    const cleaned = value.trim();
+    if (cleaned.length > 1000) throw new Error("A photo link is too long.");
+    let parsed: URL;
+    try {
+      parsed = new URL(cleaned);
+    } catch {
+      throw new Error("Enter a valid photo link.");
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("Photo links must use http or https.");
+    }
+    return cleaned;
+  });
+}
+
+function requiredText(value: string, label: string, maxLength: number) {
+  const cleaned = value.trim().replace(/\s+/g, " ");
+  if (!cleaned) throw new Error(`${label} is required.`);
+  if (cleaned.length > maxLength) throw new Error(`${label} is too long.`);
+  return cleaned;
+}
+
+function optionalText(
+  value: string | undefined,
+  label: string,
+  maxLength: number,
+) {
+  if (value === undefined) return undefined;
+  const cleaned = value.trim().replace(/\s+/g, " ");
+  if (!cleaned) return undefined;
+  if (cleaned.length > maxLength) throw new Error(`${label} is too long.`);
+  return cleaned;
+}
+
+export function normalizeEmail(value: string | undefined) {
+  if (!value) return undefined;
+  const email = value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    throw new Error("Enter a valid email address.");
+  }
+  return email;
+}
+
+export function normalizePhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (/^61[23478]\d{8}$/.test(digits)) return `+61${digits.slice(2)}`;
+  if (/^0[23478]\d{8}$/.test(digits)) return `+61${digits.slice(1)}`;
+  throw new Error("Enter a valid Australian phone number.");
+}
+
+export function validateSchedule(date: string, time: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+    throw new Error("Select a valid requested date.");
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== date
+  ) {
+    throw new Error("Select a valid requested date.");
+  }
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  if (parsed < today) throw new Error("Requested date cannot be in the past.");
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
+    throw new Error("Select a valid requested time.");
+}
+
+export type BookingDetailsInput = {
+  firstName: string;
+  lastName?: string;
+  email?: string;
+  phone: string;
+  addressLine1: string;
+  addressLine2?: string;
+  suburb: string;
+  state: string;
+  postcode: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  notes?: string;
+};
+
+export async function applyBookingDetails(
+  ctx: MutationCtx,
+  booking: Doc<"bookings">,
+  args: BookingDetailsInput,
+  options: { recheckAvailability: boolean },
+) {
+  const firstName = requiredText(args.firstName, "First name", 80);
+  const lastName = optionalText(args.lastName, "Last name", 80);
+  const email = normalizeEmail(args.email);
+  const phone = normalizePhone(args.phone);
+  const addressLine1 = requiredText(args.addressLine1, "Address", 160);
+  const addressLine2 = optionalText(args.addressLine2, "Address line 2", 160);
+  const suburb = requiredText(args.suburb, "Suburb", 80);
+  const state = requiredText(args.state, "State", 3).toUpperCase();
+  const postcode = args.postcode.trim();
+  const notes = optionalText(args.notes, "Notes", 2000);
+  if (!new Set(["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"]).has(state)) {
+    throw new Error("Select a valid Australian state or territory.");
+  }
+  if (!/^\d{4}$/.test(postcode)) throw new Error("Postcode must contain four digits.");
+  validateSchedule(args.scheduledDate, args.scheduledTime);
+  if (options.recheckAvailability) {
+    await ensurePublicSlotAvailable(ctx, args.scheduledDate, args.scheduledTime, booking._id);
+  }
+  const now = Date.now();
+  await ctx.db.patch(booking.customerId, { firstName, lastName, email, phone, updatedAt: now });
+  await ctx.db.patch(booking._id, {
+    addressLine1,
+    addressLine2,
+    suburb,
+    state,
+    postcode,
+    scheduledDate: args.scheduledDate,
+    scheduledTime: args.scheduledTime,
+    notes,
+    updatedAt: now,
+  });
+}
+
+export const createWebsiteBooking = mutation({
+  args: {
+    submissionKey: v.string(),
+    sessionId: v.optional(v.string()),
+    firstName: v.string(),
+    lastName: v.optional(v.string()),
+    email: v.optional(v.string()),
+    phone: v.string(),
+    serviceId: v.id("services"),
+    answers: v.record(v.string(), answerValue),
+    addressLine1: v.string(),
+    addressLine2: v.optional(v.string()),
+    suburb: v.string(),
+    state: v.string(),
+    postcode: v.string(),
+    scheduledDate: v.string(),
+    scheduledTime: v.string(),
+    paymentOption,
+    notes: v.optional(v.string()),
+  },
+  returns: v.object({
+    bookingId: v.id("bookings"),
+    reference: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const submissionKey = args.submissionKey.trim();
+    if (!/^[0-9a-f-]{36}$/i.test(submissionKey)) {
+      throw new Error("The booking submission identifier is invalid.");
+    }
+    const existingSubmission = await ctx.db
+      .query("bookings")
+      .withIndex("by_submission_key", (index) =>
+        index.eq("submissionKey", submissionKey),
+      )
+      .unique();
+    if (existingSubmission) {
+      const reference =
+        existingSubmission.reference ?? (await allocateWorkReference(ctx));
+      if (!existingSubmission.reference) {
+        await ctx.db.patch(existingSubmission._id, { reference });
+        if (existingSubmission.quoteRequestId) {
+          await ctx.db.patch(existingSubmission.quoteRequestId, { reference });
+        }
+      }
+      await linkWebsiteBooking(ctx, {
+        sessionId: args.sessionId,
+        quoteId: existingSubmission.quoteRequestId,
+        bookingId: existingSubmission._id,
+        customerId: existingSubmission.customerId,
+      });
+      return { bookingId: existingSubmission._id, reference };
+    }
+
+    const service = await ctx.db.get(args.serviceId);
+    if (!service || service.status !== "ACTIVE")
+      throw new Error("Active service not found.");
+    const estimate = await calculateEstimateForService(ctx, {
+      serviceId: service._id,
+      answers: args.answers,
+    });
+    if (estimate.type !== "ESTIMATE")
+      throw new Error("This service cannot be booked with an instant total.");
+
+    if (
+      service.paymentRequirement === "FULL" &&
+      args.paymentOption !== "FULL"
+    ) {
+      throw new Error("Full payment is required for this service.");
+    }
+    if (
+      service.paymentRequirement === "DEPOSIT_ONLY" &&
+      args.paymentOption !== "DEPOSIT"
+    ) {
+      throw new Error("A deposit is required for this service.");
+    }
+    if (
+      service.paymentRequirement === "DEPOSIT_OR_FULL" &&
+      args.paymentOption !== "DEPOSIT" &&
+      args.paymentOption !== "FULL"
+    ) {
+      throw new Error("Select deposit or full payment.");
+    }
+    if (
+      service.paymentRequirement === "PAY_LATER" &&
+      args.paymentOption !== "PAY_LATER"
+    ) {
+      throw new Error("This service is configured for payment later.");
+    }
+
+    const firstName = requiredText(args.firstName, "First name", 80);
+    const lastName = optionalText(args.lastName, "Last name", 80);
+    const email = normalizeEmail(args.email);
+    const phone = normalizePhone(args.phone);
+    const addressLine1 = requiredText(args.addressLine1, "Address", 160);
+    const addressLine2 = optionalText(args.addressLine2, "Address line 2", 160);
+    const suburb = requiredText(args.suburb, "Suburb", 80);
+    const state = requiredText(args.state, "State", 3).toUpperCase();
+    const postcode = args.postcode.trim();
+    const notes = optionalText(args.notes, "Notes", 2000);
+    if (
+      !new Set(["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"]).has(state)
+    ) {
+      throw new Error("Select a valid Australian state or territory.");
+    }
+    if (!/^\d{4}$/.test(postcode))
+      throw new Error("Postcode must contain four digits.");
+    const serviceArea = await assessPostcode(ctx, postcode);
+    if (!serviceArea.canInstantBook) {
+      throw new Error(
+        serviceArea.status === "CHECK_ADDRESS"
+          ? "We need to confirm this address before booking. Please request a call."
+          : "This postcode is outside our standard service area. Please request a call.",
+      );
+    }
+    validateSchedule(args.scheduledDate, args.scheduledTime);
+    await ensurePublicSlotAvailable(ctx, args.scheduledDate, args.scheduledTime);
+
+    const questions = (
+      await ctx.db
+        .query("serviceQuestions")
+        .withIndex("by_service", (index) => index.eq("serviceId", service._id))
+        .collect()
+    ).filter((question) => question.status === "ACTIVE");
+    const serviceAnswers = questions
+      .filter(
+        (question) =>
+          args.answers[question.key] !== undefined &&
+          (question.key !== "carpetRooms" || args.answers.carpetSteam === true),
+      )
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((question) => ({
+        key: question.key,
+        label: question.label,
+        value: args.answers[question.key]!,
+      }));
+
+    const byEmail = email
+      ? await ctx.db
+          .query("customers")
+          .withIndex("by_email", (index) => index.eq("email", email))
+          .first()
+      : null;
+    const byPhone = byEmail
+      ? null
+      : await ctx.db
+          .query("customers")
+          .withIndex("by_phone", (index) => index.eq("phone", phone))
+          .first();
+    const existing = byEmail ?? byPhone;
+    const now = Date.now();
+    const customerId = existing
+      ? existing._id
+      : await ctx.db.insert("customers", {
+          firstName,
+          lastName,
+          email,
+          phone,
+          status: "ACTIVE",
+          source: "WEBSITE",
+          createdAt: now,
+          updatedAt: now,
+        });
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        firstName,
+        lastName,
+        ...(email ? { email } : {}),
+        phone,
+        updatedAt: now,
+      });
+    }
+
+    const depositAmountCents =
+      args.paymentOption === "DEPOSIT"
+        ? estimate.depositAmountCents
+        : undefined;
+    if (args.paymentOption === "DEPOSIT" && depositAmountCents === undefined) {
+      throw new Error("Deposit configuration is unavailable.");
+    }
+
+    const isPayLater = args.paymentOption === "PAY_LATER";
+    const paymentStatus = "UNPAID" as const;
+    const reference = await allocateWorkReference(ctx);
+    const bookingId = await ctx.db.insert("bookings", {
+      reference,
+      submissionKey,
+      customerId,
+      serviceId: service._id,
+      source: "WEBSITE",
+      status: isPayLater ? "CONFIRMED" : "PENDING_PAYMENT",
+      paymentStatus,
+      paymentOption: args.paymentOption,
+      paymentMode: isPayLater ? "PAY_LATER" : "STRIPE_CHECKOUT",
+      estimatedSubtotalCents: estimate.subtotal,
+      estimatedTotalCents: estimate.total,
+      finalTotalCents: estimate.total,
+      depositAmountCents,
+      serviceAnswers,
+      estimateBreakdown: estimate.breakdown,
+      addressLine1,
+      addressLine2,
+      suburb,
+      state,
+      postcode,
+      serviceAreaStatus: serviceArea.status,
+      serviceAreaCheckedAt: now,
+      scheduledDate: args.scheduledDate,
+      scheduledTime: args.scheduledTime,
+      notes,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const quoteRequestId = await ctx.db.insert("quoteRequests", {
+      reference,
+      submissionKey,
+      customerId,
+      serviceId: service._id,
+      source: "WEBSITE",
+      pricingSource: "SERVICE",
+      convertedBookingId: bookingId,
+      serviceType: service.name,
+      addressLine1,
+      addressLine2,
+      suburb,
+      state,
+      postcode,
+      serviceAreaStatus: serviceArea.status,
+      serviceAreaCheckedAt: now,
+      preferredDate: args.scheduledDate,
+      preferredTime: args.scheduledTime,
+      propertyType:
+        typeof args.answers.propertyType === "string"
+          ? args.answers.propertyType
+          : undefined,
+      bedrooms:
+        typeof args.answers.bedrooms === "number"
+          ? args.answers.bedrooms
+          : undefined,
+      bathrooms:
+        typeof args.answers.bathrooms === "number"
+          ? args.answers.bathrooms
+          : undefined,
+      notes,
+      submittedAnswers: serviceAnswers,
+      estimateType: "ESTIMATE",
+      estimatedSubtotalCents: estimate.subtotal,
+      estimatedTotalCents: estimate.total,
+      estimateBreakdown: estimate.breakdown,
+      status: isPayLater ? "ACCEPTED" : "QUOTED",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(bookingId, { quoteRequestId });
+    await linkWebsiteQuote(ctx, args.sessionId, quoteRequestId, customerId);
+    await linkWebsiteBooking(ctx, {
+      sessionId: args.sessionId,
+      quoteId: quoteRequestId,
+      bookingId,
+      customerId,
+    });
+
+    const confirmationEmail = email ?? existing?.email;
+    if (isPayLater && confirmationEmail) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendBookingConfirmation, {
+        bookingId,
+        bookingReference: reference,
+        customerId,
+        to: confirmationEmail,
+        customerFirstName: firstName,
+        serviceName: service.name,
+        scheduledDate: args.scheduledDate,
+        scheduledTime: args.scheduledTime,
+        address: [
+          addressLine1,
+          addressLine2,
+          `${suburb} ${state} ${postcode}`,
+        ]
+          .filter(Boolean)
+          .join(", "),
+        totalAmountCents: estimate.total,
+        amountPaidCents: 0,
+        paymentStatus,
+        developmentPayment: false,
+      });
+    }
+
+    return { bookingId, reference };
+  },
+});
+
+export const updateDetails = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    firstName: v.string(),
+    lastName: v.optional(v.string()),
+    email: v.optional(v.string()),
+    phone: v.string(),
+    addressLine1: v.string(),
+    addressLine2: v.optional(v.string()),
+    suburb: v.string(),
+    state: v.string(),
+    postcode: v.string(),
+    scheduledDate: v.string(),
+    scheduledTime: v.string(),
+    notes: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    await applyBookingDetails(ctx, booking, args, {
+      recheckAvailability:
+        booking.scheduledDate !== args.scheduledDate ||
+        booking.scheduledTime !== args.scheduledTime,
+    });
+    return null;
+  },
+});
+
+export const addPriceAdjustment = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    description: v.string(),
+    amountCents: v.number(),
+  },
+  returns: v.id("bookingAdjustments"),
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    const description = requiredText(args.description, "Adjustment description", 240);
+    if (!Number.isSafeInteger(args.amountCents) || args.amountCents === 0) {
+      throw new Error("Enter a valid non-zero adjustment amount.");
+    }
+    if (Math.abs(args.amountCents) > 1_000_000) {
+      throw new Error("Adjustment amount is too large.");
+    }
+
+    const [adjustments, payments] = await Promise.all([
+      ctx.db
+        .query("bookingAdjustments")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .collect(),
+      ctx.db
+        .query("bookingPayments")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .collect(),
+    ]);
+    const existingTotal = adjustments.reduce(
+      (total, adjustment) => total + adjustment.amountCents,
+      0,
+    );
+    const originalTotal = booking.estimatedTotalCents ?? (booking.finalTotalCents - existingTotal);
+    const revisedTotal = originalTotal + existingTotal + args.amountCents;
+    if (revisedTotal < 0) throw new Error("The revised booking total cannot be negative.");
+    const hasInitialRecord = payments.some((payment) => payment.kind === "INITIAL");
+    const legacyPaid = booking.paymentLedgerInitializedAt || hasInitialRecord
+      ? 0
+      : booking.paymentStatus === "PAID"
+        ? originalTotal
+        : booking.paymentStatus === "DEPOSIT_PAID"
+          ? (booking.depositAmountCents ?? 0)
+          : 0;
+    const amountPaidCents =
+      legacyPaid +
+      payments
+        .filter((payment) => payment.status === "PAID")
+        .reduce((total, payment) => total + payment.amountCents, 0);
+
+    const authorName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "Admin";
+    const now = Date.now();
+    const adjustmentId = await ctx.db.insert("bookingAdjustments", {
+      bookingId: booking._id,
+      description,
+      amountCents: args.amountCents,
+      authorUserId: user._id,
+      authorName,
+      createdAt: now,
+    });
+    await ctx.db.patch(booking._id, {
+      finalTotalCents: revisedTotal,
+      paymentStatus:
+        amountPaidCents >= revisedTotal
+          ? "PAID"
+          : amountPaidCents > 0
+            ? "DEPOSIT_PAID"
+            : "UNPAID",
+      updatedAt: now,
+    });
+    return adjustmentId;
+  },
+});
+
+export const recordManualPayment = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    amountCents: v.number(),
+    paymentMethod: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    reference: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  returns: v.id("bookingPayments"),
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
+      throw new Error("Enter a valid payment amount greater than zero.");
+    }
+    if (args.amountCents > 1_000_000) {
+      throw new Error("Payment amount is too large.");
+    }
+    const reference = args.reference?.trim();
+    const note = args.note?.trim();
+    if (reference && reference.length > 160) {
+      throw new Error("Payment reference must be 160 characters or fewer.");
+    }
+    if (note && note.length > 1000) {
+      throw new Error("Payment note must be 1,000 characters or fewer.");
+    }
+
+    const [payments, adjustments] = await Promise.all([
+      ctx.db
+        .query("bookingPayments")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .collect(),
+      ctx.db
+        .query("bookingAdjustments")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .collect(),
+    ]);
+    const adjustmentsTotal = adjustments.reduce(
+      (total, adjustment) => total + adjustment.amountCents,
+      0,
+    );
+    const originalTotal =
+      booking.estimatedTotalCents ?? booking.finalTotalCents - adjustmentsTotal;
+    const hasInitialRecord = payments.some(
+      (payment) => payment.kind === "INITIAL",
+    );
+    const legacyPaidCents =
+      booking.paymentLedgerInitializedAt || hasInitialRecord
+        ? 0
+        : booking.paymentStatus === "PAID"
+          ? originalTotal
+          : booking.paymentStatus === "DEPOSIT_PAID"
+            ? (booking.depositAmountCents ?? 0)
+            : 0;
+    const recordedPaidCents = payments
+      .filter((payment) => payment.status === "PAID")
+      .reduce((total, payment) => total + payment.amountCents, 0);
+    const authorName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "Admin";
+    const now = Date.now();
+
+    // Materialise the inferred amount on older bookings before the first new
+    // ledger entry so future totals never depend on the booking status label.
+    if (!booking.paymentLedgerInitializedAt && !hasInitialRecord && legacyPaidCents > 0) {
+      await ctx.db.insert("bookingPayments", {
+        bookingId: booking._id,
+        kind: "INITIAL",
+        status: "PAID",
+        amountCents: legacyPaidCents,
+        requestKey: `legacy-initial:${booking._id}`,
+        paymentMethod: "STRIPE",
+        paymentIntentId: booking.stripePaymentIntentId,
+        paidAt: booking.updatedAt,
+        createdAt: booking.createdAt,
+        updatedAt: now,
+      });
+    }
+
+    const paymentId = await ctx.db.insert("bookingPayments", {
+      bookingId: booking._id,
+      kind: "MANUAL",
+      status: "PAID",
+      amountCents: args.amountCents,
+      requestKey: `manual:${crypto.randomUUID()}`,
+      paymentMethod: args.paymentMethod,
+      reference: reference || undefined,
+      note: note || undefined,
+      createdByUserId: user._id,
+      createdByName: authorName,
+      paidAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const amountPaidCents = legacyPaidCents + recordedPaidCents + args.amountCents;
+    await ctx.db.patch(booking._id, {
+      paymentLedgerInitializedAt: booking.paymentLedgerInitializedAt ?? now,
+      paymentStatus:
+        amountPaidCents >= booking.finalTotalCents
+          ? "PAID"
+          : amountPaidCents > 0
+            ? "DEPOSIT_PAID"
+            : "UNPAID",
+      updatedAt: now,
+    });
+    const methodLabel =
+      args.paymentMethod === "BANK_TRANSFER" ? "Bank transfer" : "Cash";
+    const formattedAmount = new Intl.NumberFormat("en-AU", {
+      style: "currency",
+      currency: "AUD",
+    }).format(args.amountCents / 100);
+    const details = [
+      `${methodLabel} payment of ${formattedAmount} recorded.`,
+      reference ? `Reference: ${reference}.` : undefined,
+      note || undefined,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    await ctx.db.insert("bookingNotes", {
+      bookingId: booking._id,
+      authorUserId: user._id,
+      authorName,
+      kind: "ADMIN_NOTE",
+      body: details,
+      createdAt: now,
+    });
+    return paymentId;
+  },
+});
+
+export const setCleanerAssignment = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    cleanerId: v.id("cleaners"),
+    assigned: v.boolean(),
+    appOrigin: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    const cleaner = await ctx.db.get(args.cleanerId);
+    if (!cleaner) throw new Error("Cleaner not found.");
+    const existing = await ctx.db
+      .query("bookingCleanerAssignments")
+      .withIndex("by_booking_and_cleaner", (index) =>
+        index.eq("bookingId", booking._id).eq("cleanerId", cleaner._id),
+      )
+      .unique();
+    if (args.assigned) {
+      if (cleaner.status !== "ACTIVE") {
+        throw new Error("Only active cleaners can be assigned.");
+      }
+      if (!cleaner.email) {
+        throw new Error("Add an email address to the cleaner before assigning this job.");
+      }
+      if (!existing) {
+        await ctx.db.insert("bookingCleanerAssignments", {
+          bookingId: booking._id,
+          cleanerId: cleaner._id,
+          assignedByUserId: user._id,
+          assignedAt: Date.now(),
+          status: "OFFERED",
+        });
+        const [customer, service] = await Promise.all([
+          ctx.db.get(booking.customerId),
+          ctx.db.get(booking.serviceId),
+        ]);
+        await ctx.scheduler.runAfter(0, internal.emails.sendCleanerJobAssigned, {
+            bookingId: booking._id,
+            cleanerId: cleaner._id,
+            customerId: booking.customerId,
+            to: cleaner.email,
+            cleanerFirstName: cleaner.firstName,
+            bookingReference: booking.reference ?? String(booking._id),
+            serviceName: service?.name ?? "Cleaning service",
+            customerName: customer
+              ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
+              : "Customer",
+            customerPhone: customer?.phone ?? "Not provided",
+            scheduledDate: booking.scheduledDate,
+            scheduledTime: booking.scheduledTime,
+            address: [booking.addressLine1, booking.addressLine2, booking.suburb, booking.state, booking.postcode]
+              .filter(Boolean)
+              .join(", "),
+            jobUrl: cleanerJobUrl(args.appOrigin, String(booking._id)),
+        });
+      }
+    } else if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+    await ctx.db.patch(booking._id, { updatedAt: Date.now() });
+    return null;
+  },
+});
+
+export const addBookingNote = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    kind: noteKind,
+    body: v.string(),
+    photoUrls: v.optional(v.array(v.string())),
+  },
+  returns: v.id("bookingNotes"),
+  handler: async (ctx, args) => {
+    const user = await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    const body = requiredText(args.body, "Note", 4000);
+    const photoUrls = validatePhotoUrls(args.photoUrls);
+    const authorName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "Admin";
+    return ctx.db.insert("bookingNotes", {
+      bookingId: booking._id,
+      authorUserId: user._id,
+      authorName,
+      kind: args.kind,
+      body,
+      photoUrls,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+export const deleteBookingNote = mutation({
+  args: { noteId: v.id("bookingNotes") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const note = await ctx.db.get(args.noteId);
+    if (!note) throw new Error("Note not found.");
+    await ctx.db.delete(note._id);
+    return null;
+  },
+});
+
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_created_at")
+      .order("desc")
+      .take(100);
+    return Promise.all(
+      bookings.map(async (booking) => {
+        const [customer, service] = await Promise.all([
+          ctx.db.get(booking.customerId),
+          ctx.db.get(booking.serviceId),
+        ]);
+        return {
+          ...booking,
+          customerName: customer
+            ? [customer.firstName, customer.lastName].filter(Boolean).join(" ")
+            : "Unknown customer",
+          serviceName: service?.name ?? "Unknown service",
+        };
+      }),
+    );
+  },
+});
+
+export const get = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    await requireRole(ctx, ["SUPER_ADMIN", "ADMIN"]);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    const [customer, service, bookingNotes, adjustments, payments, emailLogs, cleanerAssignments] = await Promise.all([
+      ctx.db.get(booking.customerId),
+      ctx.db.get(booking.serviceId),
+      ctx.db
+        .query("bookingNotes")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .order("desc")
+        .take(100),
+      ctx.db
+        .query("bookingAdjustments")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .order("desc")
+        .take(100),
+      ctx.db
+        .query("bookingPayments")
+        .withIndex("by_booking_and_created_at", (index) =>
+          index.eq("bookingId", booking._id),
+        )
+        .order("desc")
+        .take(100),
+      ctx.db
+        .query("emailLogs")
+        .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
+        .collect(),
+      ctx.db
+        .query("bookingCleanerAssignments")
+        .withIndex("by_booking", (index) => index.eq("bookingId", booking._id))
+        .collect(),
+    ]);
+    const assignedCleaners = (
+      await Promise.all(
+        cleanerAssignments.map(async (assignment) => {
+          const cleaner = await ctx.db.get(assignment.cleanerId);
+          return cleaner ? {
+            ...cleaner,
+            name: `${cleaner.firstName} ${cleaner.lastName}`,
+            assignmentStatus: assignment.status ?? 'ACCEPTED',
+          } : null;
+        }),
+      )
+    ).filter((cleaner): cleaner is NonNullable<typeof cleaner> => cleaner !== null);
+    const adjustmentsTotalCents = adjustments.reduce(
+      (total, adjustment) => total + adjustment.amountCents,
+      0,
+    );
+    const hasInitialPaymentRecord = payments.some(
+      (payment) => payment.kind === "INITIAL",
+    );
+    const legacyPaidCents = booking.paymentLedgerInitializedAt || hasInitialPaymentRecord
+      ? 0
+      : booking.paymentStatus === "PAID"
+        ? (booking.estimatedTotalCents ?? booking.finalTotalCents - adjustmentsTotalCents)
+        : booking.paymentStatus === "DEPOSIT_PAID"
+          ? (booking.depositAmountCents ?? 0)
+          : 0;
+    const amountPaidCents =
+      legacyPaidCents +
+      payments
+        .filter((payment) => payment.status === "PAID")
+        .reduce((total, payment) => total + payment.amountCents, 0);
+    const originalTotalCents =
+      booking.estimatedTotalCents ?? booking.finalTotalCents - adjustmentsTotalCents;
+    return {
+      ...booking,
+      customer,
+      service,
+      bookingNotes,
+      assignedCleaners,
+      adjustments,
+      payments,
+      invoiceEmails: emailLogs
+        .filter((email) => email.type === "INVOICE")
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 20),
+      paymentSnapshot: {
+        originalTotalCents,
+        adjustmentsTotalCents,
+        revisedTotalCents: booking.finalTotalCents,
+        amountPaidCents,
+        balanceDueCents: Math.max(0, booking.finalTotalCents - amountPaidCents),
+        refundDueCents: Math.max(0, amountPaidCents - booking.finalTotalCents),
+      },
+    };
+  },
+});

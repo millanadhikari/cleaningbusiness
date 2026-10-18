@@ -1,0 +1,869 @@
+"use client";
+
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import {
+  ArrowLeft,
+  Calculator,
+  CircleDollarSign,
+  LoaderCircle,
+  Save,
+} from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { type FormEvent, useState } from "react";
+import { api } from "@/convex/_generated/api";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
+import { AdminListHeader, AdminListPage } from "./admin-list-layout";
+
+type AnswerValue = number | boolean | string | string[];
+type PricingSource = "SERVICE" | "CUSTOM";
+type PricingPreview =
+  | {
+      type: "ESTIMATE";
+      total: number;
+      breakdown: Array<{ label: string; amount: number }>;
+    }
+  | {
+      type: "HOURLY";
+      hourlyRate: number | null;
+      minimumHours?: number;
+    }
+  | { type: "CUSTOM_REQUIRED" };
+
+const states = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"];
+
+function optionalString(data: FormData, name: string) {
+  const value = String(data.get(name) ?? "").trim();
+  return value || undefined;
+}
+
+function optionalNumber(data: FormData, name: string) {
+  const value = optionalString(data, name);
+  return value === undefined ? undefined : Number(value);
+}
+
+function centsFromDollars(value: string | undefined) {
+  if (!value) return undefined;
+  return Math.round(Number(value) * 100);
+}
+
+function inputValue(value: AnswerValue | undefined) {
+  return typeof value === "string" || typeof value === "number" ? value : "";
+}
+
+function formatMoney(cents: number) {
+  return new Intl.NumberFormat("en-AU", {
+    style: "currency",
+    currency: "AUD",
+  }).format(cents / 100);
+}
+
+function pricingRuleLabel(rule: Doc<"servicePricingRules">) {
+  if (rule.ruleType === "BASE_PRICE") {
+    return `${formatMoney(rule.amount)} base price`;
+  }
+  if (rule.ruleType === "HOURLY_RATE") {
+    return `${formatMoney(rule.amount)} per hour${rule.minQuantity ? ` · ${rule.minQuantity}h minimum` : ""}`;
+  }
+  if (rule.ruleType === "PERCENTAGE") {
+    return `${rule.amount / 100}% adjustment`;
+  }
+  if (rule.ruleType === "FIXED_ADDON") {
+    return `${formatMoney(rule.amount)} add-on`;
+  }
+  if (rule.includedQuantity) {
+    return `${rule.includedQuantity} included · ${formatMoney(rule.amount)} each after`;
+  }
+  return `${formatMoney(rule.amount)} each`;
+}
+
+function answerIsSelected(value: AnswerValue | undefined) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (typeof value === "string") {
+    return value.trim().length > 0 && value !== "false";
+  }
+  return Array.isArray(value) && value.length > 0;
+}
+
+function answerIsMissing(value: AnswerValue | undefined) {
+  if (value === undefined) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  return Array.isArray(value) && value.length === 0;
+}
+
+function calculatePricingPreview(
+  pricingModel: Doc<"services">["pricingModel"] | undefined,
+  rules: Doc<"servicePricingRules">[],
+  answers: Record<string, AnswerValue>,
+): PricingPreview | null {
+  if (!pricingModel) return null;
+  if (pricingModel === "CUSTOM_QUOTE") return { type: "CUSTOM_REQUIRED" };
+
+  if (pricingModel === "HOURLY") {
+    const hourlyRule = rules.find(
+      (rule) => rule.ruleType === "HOURLY_RATE",
+    );
+    return {
+      type: "HOURLY",
+      hourlyRate: hourlyRule?.amount ?? null,
+      minimumHours: hourlyRule?.minQuantity,
+    };
+  }
+
+  const effectiveAnswers = { ...answers };
+  if (effectiveAnswers.carpetSteam !== true) {
+    delete effectiveAnswers.carpetRooms;
+  }
+
+  const breakdown: Array<{ label: string; amount: number }> = [];
+  let total = 0;
+
+  for (const rule of rules) {
+    let amount = 0;
+    if (rule.ruleType === "BASE_PRICE") {
+      amount = rule.amount;
+    } else if (rule.ruleType === "PER_UNIT" && rule.questionKey) {
+      const answer = effectiveAnswers[rule.questionKey];
+      let quantity =
+        typeof answer === "number" && Number.isFinite(answer) ? answer : 0;
+      if (rule.minQuantity !== undefined) {
+        quantity = Math.max(quantity, rule.minQuantity);
+      }
+      if (rule.maxQuantity !== undefined) {
+        quantity = Math.min(quantity, rule.maxQuantity);
+      }
+      amount = Math.round(
+        rule.amount *
+          Math.max(0, quantity - (rule.includedQuantity ?? 0)),
+      );
+    } else if (
+      rule.ruleType === "FIXED_ADDON" &&
+      rule.questionKey &&
+      answerIsSelected(effectiveAnswers[rule.questionKey])
+    ) {
+      amount = rule.amount;
+    } else if (rule.ruleType === "PERCENTAGE") {
+      amount = Math.round((total * rule.amount) / 10_000);
+    }
+
+    if (amount > 0) {
+      total += amount;
+      breakdown.push({ label: rule.name, amount });
+    }
+  }
+
+  return breakdown.length
+    ? { type: "ESTIMATE", total, breakdown }
+    : { type: "CUSTOM_REQUIRED" };
+}
+
+function LivePriceSummary({
+  serviceSelected,
+  pricingSource,
+  preview,
+  customTotalCents,
+  servicePriceIsComplete,
+}: {
+  serviceSelected: boolean;
+  pricingSource: PricingSource;
+  preview: PricingPreview | null;
+  customTotalCents?: number;
+  servicePriceIsComplete: boolean;
+}) {
+  const customTotalIsValid =
+    customTotalCents !== undefined &&
+    Number.isFinite(customTotalCents) &&
+    customTotalCents > 0;
+  const total =
+    pricingSource === "CUSTOM"
+      ? customTotalIsValid
+        ? customTotalCents
+        : undefined
+      : preview?.type === "ESTIMATE"
+        ? preview.total
+        : undefined;
+
+  return (
+    <aside className="rounded-2xl border border-emerald-200 bg-[#f3fbf7] p-5 shadow-[0_8px_24px_rgba(8,127,112,0.08)] lg:sticky lg:top-24">
+      <div className="flex items-center gap-2 text-emerald-800">
+        <CircleDollarSign className="size-5" />
+        <p className="text-xs font-bold uppercase tracking-[0.12em]">
+          Live quote total
+        </p>
+      </div>
+
+      {!serviceSelected ? (
+        <p className="mt-4 text-sm text-slate-600">
+          Select a service to calculate the price.
+        </p>
+      ) : total !== undefined ? (
+        <>
+          <p
+            aria-live="polite"
+            className="mt-3 text-4xl font-extrabold tracking-tight text-[#173c38]"
+          >
+            {formatMoney(total)}
+          </p>
+          <p className="mt-1 text-xs font-medium text-slate-600">
+            {pricingSource === "CUSTOM"
+              ? "Custom quoted price"
+              : servicePriceIsComplete
+                ? "Final total from the selected options"
+                : "Current total · complete required options to finalise"}
+          </p>
+          {pricingSource === "SERVICE" &&
+          preview?.type === "ESTIMATE" &&
+          preview.breakdown.length ? (
+            <div className="mt-4 space-y-2 border-t border-emerald-200 pt-4">
+              {preview.breakdown.map((item, index) => (
+                <div
+                  key={`${item.label}-${index}`}
+                  className="flex items-start justify-between gap-3 text-sm"
+                >
+                  <span className="text-slate-600">{item.label}</span>
+                  <span className="shrink-0 font-semibold text-slate-900">
+                    {formatMoney(item.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : pricingSource === "CUSTOM" ? (
+        <p className="mt-4 text-sm text-slate-600">
+          Enter the agreed custom amount to show the total.
+        </p>
+      ) : preview?.type === "HOURLY" ? (
+        <div className="mt-4">
+          <p className="text-2xl font-bold text-[#173c38]">
+            {preview.hourlyRate === null
+              ? "Rate not configured"
+              : `${formatMoney(preview.hourlyRate)} / hour`}
+          </p>
+          {preview.minimumHours ? (
+            <p className="mt-1 text-sm text-slate-600">
+              Minimum {preview.minimumHours} hours
+            </p>
+          ) : null}
+          <p className="mt-3 text-xs text-slate-500">
+            Choose a custom quoted price when you have agreed the exact total.
+          </p>
+        </div>
+      ) : (
+        <p className="mt-4 text-sm text-slate-600">
+          This service needs a custom quoted price before an exact total can be
+          provided.
+        </p>
+      )}
+    </aside>
+  );
+}
+
+export function AdminQuoteForm({
+  quoteRequestId,
+}: {
+  quoteRequestId?: Id<"quoteRequests">;
+}) {
+  const { isAuthenticated } = useConvexAuth();
+  const quote = useQuery(
+    api.quoteRequests.get,
+    isAuthenticated && quoteRequestId ? { quoteRequestId } : "skip",
+  );
+
+  if (!isAuthenticated || (quoteRequestId && quote === undefined)) {
+    return (
+      <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
+        <LoaderCircle className="size-4 animate-spin" /> Loading quote…
+      </div>
+    );
+  }
+  if (quoteRequestId && quote === null) {
+    return <p className="text-sm text-red-700">Quote not found.</p>;
+  }
+
+  return (
+    <AdminQuoteEditor
+      key={quote?._id ?? "new"}
+      quoteRequestId={quoteRequestId}
+      quote={quote ?? undefined}
+    />
+  );
+}
+
+function AdminQuoteEditor({
+  quoteRequestId,
+  quote,
+}: {
+  quoteRequestId?: Id<"quoteRequests">;
+  quote?: Doc<"quoteRequests"> & { customer: Doc<"customers"> | null };
+}) {
+  const router = useRouter();
+  const services = useQuery(api.services.listAdminServices, {});
+  const createQuote = useMutation(api.quoteRequests.createAdminQuote);
+  const updateQuote = useMutation(api.quoteRequests.updateAdminQuote);
+  const [serviceId, setServiceId] = useState(quote?.serviceId ?? "");
+  const [pricingSource, setPricingSource] = useState<PricingSource>(
+    quote?.pricingSource ?? "SERVICE",
+  );
+  const [answers, setAnswers] = useState<Record<string, AnswerValue>>(
+    Object.fromEntries(
+      (quote?.submittedAnswers ?? []).map((answer) => [
+        answer.key,
+        answer.value,
+      ]),
+    ),
+  );
+  const [customTotal, setCustomTotal] = useState(
+    quote?.estimatedTotalCents === undefined
+      ? ""
+      : (quote.estimatedTotalCents / 100).toFixed(2),
+  );
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const serviceConfiguration = useQuery(
+    api.services.getAdminService,
+    serviceId ? { serviceId: serviceId as Id<"services"> } : "skip",
+  );
+  const questions = serviceConfiguration?.questions.filter(
+    (question) => question.status === "ACTIVE",
+  );
+  const pricingRules = serviceConfiguration?.pricingRules.filter(
+    (rule) => rule.status === "ACTIVE",
+  );
+  const generalPricingRules = pricingRules?.filter(
+    (rule) => !rule.questionKey,
+  );
+  const pricingPreview = calculatePricingPreview(
+    serviceConfiguration?.service.pricingModel,
+    pricingRules ?? [],
+    answers,
+  );
+  const missingRequiredAnswers =
+    questions?.filter(
+      (question) =>
+        question.required && answerIsMissing(answers[question.key]),
+    ).length ?? 0;
+  const carpetRoomsMissing =
+    answers.carpetSteam === true &&
+    (typeof answers.carpetRooms !== "number" || answers.carpetRooms < 1);
+  const servicePriceIsComplete =
+    missingRequiredAnswers === 0 && !carpetRoomsMissing;
+  const customTotalCents = centsFromDollars(customTotal);
+
+  const customer = quote?.customer;
+  const isEdit = Boolean(quoteRequestId);
+  const isLocked = Boolean(quote?.convertedBookingId);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!serviceId || isSaving) return;
+    const data = new FormData(event.currentTarget);
+    const payload = {
+      firstName: String(data.get("firstName") ?? ""),
+      lastName: optionalString(data, "lastName"),
+      email: optionalString(data, "email"),
+      phone: String(data.get("phone") ?? ""),
+      serviceId: serviceId as Id<"services">,
+      pricingSource,
+      answers,
+      customTotalCents:
+        pricingSource === "CUSTOM"
+          ? customTotalCents
+          : undefined,
+      addressLine1: String(data.get("addressLine1") ?? ""),
+      addressLine2: optionalString(data, "addressLine2"),
+      suburb: String(data.get("suburb") ?? ""),
+      state: String(data.get("state") ?? ""),
+      postcode: String(data.get("postcode") ?? ""),
+      preferredDate: optionalString(data, "preferredDate"),
+      preferredTime: optionalString(data, "preferredTime"),
+      propertyType: optionalString(data, "propertyType"),
+      bedrooms: optionalNumber(data, "bedrooms"),
+      bathrooms: optionalNumber(data, "bathrooms"),
+      notes: optionalString(data, "notes"),
+    };
+    setIsSaving(true);
+    setError(null);
+    try {
+      if (quoteRequestId) {
+        await updateQuote({ quoteRequestId, ...payload });
+        router.push(`/admin/quotes/${quoteRequestId}`);
+      } else {
+        const id = await createQuote(payload);
+        router.push(`/admin/quotes/${id}`);
+      }
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message.replace(/^.*Uncaught Error:\s*/, "")
+          : "Unable to save the quote.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <AdminListPage>
+      <AdminListHeader
+        icon={Calculator}
+        label="Sales pipeline"
+        title={isEdit ? "Edit quote" : "Create quote"}
+        description={
+          isEdit
+            ? "Update the customer, scope, schedule, and quoted price."
+            : "Create a tailored quote using service pricing or a custom total."
+        }
+        action={
+          <Button asChild variant="outline">
+            <Link
+              href={
+                quoteRequestId
+                  ? `/admin/quotes/${quoteRequestId}`
+                  : "/admin/quotes"
+              }
+            >
+              <ArrowLeft /> Back
+            </Link>
+          </Button>
+        }
+      />
+
+      {isLocked ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          This quote is locked because it has already been converted to a
+          booking.
+        </div>
+      ) : null}
+
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <section className="rounded-[23px] border border-emerald-100 bg-white/95 p-6 shadow-[0_5px_24px_rgba(20,47,54,0.05)]">
+          <h3 className="text-lg font-semibold text-slate-950">Customer</h3>
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="firstName">First name *</Label>
+              <Input
+                id="firstName"
+                name="firstName"
+                defaultValue={customer?.firstName}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="lastName">Last name</Label>
+              <Input
+                id="lastName"
+                name="lastName"
+                defaultValue={customer?.lastName}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                defaultValue={customer?.email}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="phone">Phone *</Label>
+              <Input
+                id="phone"
+                name="phone"
+                type="tel"
+                defaultValue={customer?.phone}
+                placeholder="0412 345 678"
+                required
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-[23px] border border-emerald-100 bg-white/95 p-6 shadow-[0_5px_24px_rgba(20,47,54,0.05)]">
+          <h3 className="text-lg font-semibold text-slate-950">
+            Service and pricing
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Use the configured service rules, or override them with an agreed
+            custom total.
+          </p>
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="serviceId">Service *</Label>
+              <NativeSelect
+                id="serviceId"
+                value={serviceId}
+                onChange={(event) => {
+                  setServiceId(event.target.value);
+                  setAnswers({});
+                }}
+                required
+              >
+                <option value="">Select a service</option>
+                {services
+                  ?.filter((service) => service.status === "ACTIVE")
+                  .map((service) => (
+                    <option key={service._id} value={service._id}>
+                      {service.name}
+                    </option>
+                  ))}
+              </NativeSelect>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="pricingSource">Pricing *</Label>
+              <NativeSelect
+                id="pricingSource"
+                value={pricingSource}
+                onChange={(event) =>
+                  setPricingSource(event.target.value as PricingSource)
+                }
+              >
+                <option value="SERVICE">Calculate from service rules</option>
+                <option value="CUSTOM">Custom quoted price</option>
+              </NativeSelect>
+            </div>
+            {pricingSource === "CUSTOM" ? (
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="customTotal">Custom total (AUD) *</Label>
+                <Input
+                  id="customTotal"
+                  name="customTotal"
+                  type="number"
+                  min="0.01"
+                  max="1000000"
+                  step="0.01"
+                  value={customTotal}
+                  onChange={(event) => setCustomTotal(event.target.value)}
+                  required
+                />
+              </div>
+            ) : null}
+            {pricingSource === "SERVICE" && generalPricingRules?.length ? (
+              <div className="sm:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-900">
+                  Core pricing
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {generalPricingRules.map((rule) => (
+                    <span
+                      key={rule._id}
+                      className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-800"
+                    >
+                      {rule.name}: {pricingRuleLabel(rule)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="grid gap-5 sm:grid-cols-2">
+              {questions?.map((question) => {
+              const questionRules = pricingRules?.filter(
+                (rule) => rule.questionKey === question.key,
+              );
+              return (
+                <div key={question.key} className="space-y-2">
+                  <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
+                    <Label htmlFor={`answer-${question.key}`}>
+                      {question.label}
+                      {question.required && pricingSource === "SERVICE"
+                        ? " *"
+                        : ""}
+                    </Label>
+                    {pricingSource === "SERVICE" && questionRules?.length ? (
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {questionRules.map((rule) => (
+                          <span
+                            key={rule._id}
+                            className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-200"
+                            title={rule.description}
+                          >
+                            {pricingRuleLabel(rule)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  {question.type === "BOOLEAN" ? (
+                    <NativeSelect
+                      id={`answer-${question.key}`}
+                      value={
+                        answers[question.key] === true
+                          ? "true"
+                          : answers[question.key] === false
+                            ? "false"
+                            : ""
+                      }
+                      onChange={(event) =>
+                        setAnswers((current) => {
+                          if (!event.target.value) {
+                            const next = { ...current };
+                            delete next[question.key];
+                            return next;
+                          }
+                          return {
+                            ...current,
+                            [question.key]: event.target.value === "true",
+                          };
+                        })
+                      }
+                      required={
+                        question.required && pricingSource === "SERVICE"
+                      }
+                    >
+                      <option value="">Select</option>
+                      <option value="true">Yes</option>
+                      <option value="false">No</option>
+                    </NativeSelect>
+                  ) : question.type === "SELECT" ? (
+                    <NativeSelect
+                      id={`answer-${question.key}`}
+                      value={String(answers[question.key] ?? "")}
+                      onChange={(event) =>
+                        setAnswers((current) => ({
+                          ...current,
+                          [question.key]: event.target.value,
+                        }))
+                      }
+                      required={
+                        question.required && pricingSource === "SERVICE"
+                      }
+                    >
+                      <option value="">Select</option>
+                      {question.options?.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </NativeSelect>
+                  ) : question.type === "MULTI_SELECT" ? (
+                    <div className="grid gap-2 rounded-xl border border-slate-200 p-3">
+                      {question.options?.map((option) => {
+                        const currentAnswer = answers[question.key];
+                        const selected =
+                          Array.isArray(currentAnswer) &&
+                          currentAnswer.includes(option);
+                        return (
+                          <label
+                            key={option}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={(event) =>
+                                setAnswers((current) => {
+                                  const previous = Array.isArray(
+                                    current[question.key],
+                                  )
+                                    ? (current[question.key] as string[])
+                                    : [];
+                                  return {
+                                    ...current,
+                                    [question.key]: event.target.checked
+                                      ? [...previous, option]
+                                      : previous.filter(
+                                          (item) => item !== option,
+                                        ),
+                                  };
+                                })
+                              }
+                            />
+                            {option}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Input
+                      id={`answer-${question.key}`}
+                      type={question.type === "NUMBER" ? "number" : "text"}
+                      min={question.type === "NUMBER" ? 0 : undefined}
+                      step={question.type === "NUMBER" ? 1 : undefined}
+                      value={inputValue(answers[question.key])}
+                      onChange={(event) =>
+                        setAnswers((current) => {
+                          if (!event.target.value) {
+                            const next = { ...current };
+                            delete next[question.key];
+                            return next;
+                          }
+                          return {
+                            ...current,
+                            [question.key]:
+                              question.type === "NUMBER"
+                                ? Number(event.target.value)
+                                : event.target.value,
+                          };
+                        })
+                      }
+                      required={
+                        question.required && pricingSource === "SERVICE"
+                      }
+                    />
+                  )}
+                </div>
+              );
+              })}
+            </div>
+            <LivePriceSummary
+              serviceSelected={Boolean(serviceId)}
+              pricingSource={pricingSource}
+              preview={pricingPreview}
+              customTotalCents={customTotalCents}
+              servicePriceIsComplete={servicePriceIsComplete}
+            />
+          </div>
+        </section>
+
+        <section className="rounded-[23px] border border-emerald-100 bg-white/95 p-6 shadow-[0_5px_24px_rgba(20,47,54,0.05)]">
+          <h3 className="text-lg font-semibold text-slate-950">
+            Location and schedule
+          </h3>
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="addressLine1">Address *</Label>
+              <Input
+                id="addressLine1"
+                name="addressLine1"
+                defaultValue={quote?.addressLine1}
+                required
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="addressLine2">Address line 2</Label>
+              <Input
+                id="addressLine2"
+                name="addressLine2"
+                defaultValue={quote?.addressLine2}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="suburb">Suburb *</Label>
+              <Input
+                id="suburb"
+                name="suburb"
+                defaultValue={quote?.suburb}
+                required
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="state">State *</Label>
+                <NativeSelect
+                  id="state"
+                  name="state"
+                  defaultValue={quote?.state ?? "NSW"}
+                >
+                  {states.map((state) => (
+                    <option key={state}>{state}</option>
+                  ))}
+                </NativeSelect>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="postcode">Postcode *</Label>
+                <Input
+                  id="postcode"
+                  name="postcode"
+                  inputMode="numeric"
+                  pattern="[0-9]{4}"
+                  defaultValue={quote?.postcode}
+                  required
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="preferredDate">Scheduled date</Label>
+              <Input
+                id="preferredDate"
+                name="preferredDate"
+                type="date"
+                defaultValue={quote?.preferredDate}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="preferredTime">Scheduled time</Label>
+              <Input
+                id="preferredTime"
+                name="preferredTime"
+                type="time"
+                defaultValue={quote?.preferredTime}
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-[23px] border border-emerald-100 bg-white/95 p-6 shadow-[0_5px_24px_rgba(20,47,54,0.05)]">
+          <h3 className="text-lg font-semibold text-slate-950">Job details</h3>
+          <div className="mt-5 grid gap-5 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label htmlFor="propertyType">Property type</Label>
+              <Input
+                id="propertyType"
+                name="propertyType"
+                defaultValue={quote?.propertyType}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bedrooms">Bedrooms</Label>
+              <Input
+                id="bedrooms"
+                name="bedrooms"
+                type="number"
+                min="0"
+                max="30"
+                defaultValue={quote?.bedrooms}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bathrooms">Bathrooms</Label>
+              <Input
+                id="bathrooms"
+                name="bathrooms"
+                type="number"
+                min="0"
+                max="30"
+                defaultValue={quote?.bathrooms}
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-3">
+              <Label htmlFor="notes">Notes</Label>
+              <Textarea
+                id="notes"
+                name="notes"
+                rows={5}
+                defaultValue={quote?.notes}
+              />
+            </div>
+          </div>
+        </section>
+
+        {error ? (
+          <p
+            role="alert"
+            className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+          >
+            {error}
+          </p>
+        ) : null}
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            size="lg"
+            disabled={isSaving || isLocked || !serviceId}
+          >
+            {isSaving ? <LoaderCircle className="animate-spin" /> : <Save />}
+            {isSaving ? "Saving…" : isEdit ? "Save changes" : "Create quote"}
+          </Button>
+        </div>
+      </form>
+    </AdminListPage>
+  );
+}

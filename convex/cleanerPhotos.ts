@@ -1,8 +1,9 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery, query } from "./_generated/server";
-import { requireCleaner, requireUser } from "./lib/auth";
+import { requireUser } from "./lib/auth";
 
 const photoType = v.union(
   v.literal("BEFORE"),
@@ -12,7 +13,6 @@ const photoType = v.union(
 
 const ALLOWED_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 const MAX_PHOTO_SIZE_BYTES = 10 * 1024 * 1024;
-const CLEANER_DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 type PhotoType = Doc<"cleanerPhotos">["photoType"];
 type AllowedContentType = (typeof ALLOWED_CONTENT_TYPES)[number];
@@ -67,28 +67,42 @@ function isExpectedStoragePath(
     ) && filename.endsWith(`.${extension}`);
 }
 
-async function requireActiveCleanerAssignment(
+async function requirePhotoUploader(
   ctx: QueryCtx,
   bookingId: Id<"bookings">,
 ) {
-  const { user, cleaner } = await requireCleaner(ctx);
-  const [booking, assignment] = await Promise.all([
-    ctx.db.get(bookingId),
-    ctx.db
-      .query("bookingCleanerAssignments")
-      .withIndex("by_booking_and_cleaner", (index) =>
-        index.eq("bookingId", bookingId).eq("cleanerId", cleaner._id),
-      )
-      .unique(),
-  ]);
+  const user = await requireUser(ctx);
+  const booking = await ctx.db.get(bookingId);
   if (!booking) throw new Error("Booking not found.");
+
+  if (user.role === "SUPER_ADMIN" || user.role === "ADMIN") {
+    return { user, cleaner: null, booking, assignment: null };
+  }
+  if (user.role !== "CLEANER") {
+    throw new Error("You do not have permission to add booking photos.");
+  }
+  const cleaner = await ctx.db
+    .query("cleaners")
+    .withIndex("by_user", (index) => index.eq("userId", user._id))
+    .unique();
+  if (!cleaner || cleaner.status !== "ACTIVE") {
+    throw new Error("Cleaner profile is unavailable or inactive.");
+  }
+  const assignment = await ctx.db
+    .query("bookingCleanerAssignments")
+    .withIndex("by_booking_and_cleaner", (index) =>
+      index.eq("bookingId", bookingId).eq("cleanerId", cleaner._id),
+    )
+    .unique();
   if (!assignment) throw new Error("This job is not assigned to you.");
   if (booking.status !== "CONFIRMED") {
     throw new Error("Photos cannot be changed for this booking.");
   }
   const status = assignment.status ?? "ACCEPTED";
-  if (status !== "ACCEPTED" && status !== "IN_PROGRESS") {
-    throw new Error("Photos can only be added while this job is active.");
+  if (!["ACCEPTED", "IN_PROGRESS", "COMPLETED"].includes(status)) {
+    throw new Error(
+      "Photos can only be changed for accepted, in-progress, or completed jobs.",
+    );
   }
   return { user, cleaner, booking, assignment };
 }
@@ -129,7 +143,7 @@ export const authorizeCleanerPhotoUpload = internalQuery({
     originalFileName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireActiveCleanerAssignment(ctx, args.bookingId);
+    await requirePhotoUploader(ctx, args.bookingId);
     const contentType = validateContentType(args.contentType);
     return {
       bookingId: args.bookingId,
@@ -153,7 +167,7 @@ export const authorizeCleanerPhotoConfirmation = internalQuery({
     originalFileName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireActiveCleanerAssignment(ctx, args.bookingId);
+    await requirePhotoUploader(ctx, args.bookingId);
     const contentType = validateContentType(args.contentType);
     const sizeBytes = validateSizeBytes(args.sizeBytes);
     if (!isExpectedStoragePath(args.storagePath, args.bookingId, args.photoType, contentType)) {
@@ -178,7 +192,7 @@ export const confirmCleanerPhotoMetadata = internalMutation({
     originalFileName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user, cleaner } = await requireActiveCleanerAssignment(ctx, args.bookingId);
+    const { user, cleaner, booking } = await requirePhotoUploader(ctx, args.bookingId);
     const contentType = validateContentType(args.contentType);
     const sizeBytes = validateSizeBytes(args.sizeBytes);
     if (!isExpectedStoragePath(args.storagePath, args.bookingId, args.photoType, contentType)) {
@@ -191,7 +205,8 @@ export const confirmCleanerPhotoMetadata = internalMutation({
     if (existing) {
       if (
         existing.bookingId !== args.bookingId ||
-        existing.cleanerId !== cleaner._id ||
+        existing.cleanerId !== cleaner?._id ||
+        existing.cleanerUserId !== user._id ||
         existing.status !== "UPLOADED"
       ) {
         throw new Error("This image path has already been used.");
@@ -199,9 +214,9 @@ export const confirmCleanerPhotoMetadata = internalMutation({
       return existing._id;
     }
     const now = Date.now();
-    return ctx.db.insert("cleanerPhotos", {
+    const photoId = await ctx.db.insert("cleanerPhotos", {
       bookingId: args.bookingId,
-      cleanerId: cleaner._id,
+      cleanerId: cleaner?._id,
       cleanerUserId: user._id,
       storagePath: args.storagePath,
       photoType: args.photoType,
@@ -214,6 +229,20 @@ export const confirmCleanerPhotoMetadata = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+    if (args.photoType === "ISSUE" && cleaner) {
+      const cleanerName = `${cleaner.firstName} ${cleaner.lastName}`.trim();
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+        type: "ISSUE_PHOTO_UPLOADED",
+        title: "Issue photo uploaded",
+        body: `${cleanerName} uploaded an issue photo for booking ${booking.reference ?? String(booking._id)}.`,
+        entityType: "BOOKING",
+        entityId: String(booking._id),
+        deepLink: `/admin/bookings/${booking._id}`,
+        priority: "HIGH",
+        dedupeKey: `issue-photo:${photoId}`,
+      });
+    }
+    return photoId;
   },
 });
 
@@ -231,12 +260,20 @@ export const listBookingPhotos = query({
         .filter((photo) => photo.status === "UPLOADED")
         .sort((a, b) => b.uploadedAt - a.uploadedAt)
         .map(async (photo) => {
-          const cleaner = await ctx.db.get(photo.cleanerId);
-          const cleanerCanDelete = viewer.cleaner?._id === photo.cleanerId &&
+          const [cleaner, uploader] = await Promise.all([
+            photo.cleanerId ? ctx.db.get(photo.cleanerId) : null,
+            ctx.db.get(photo.cleanerUserId),
+          ]);
+          const cleanerCanDelete = Boolean(photo.cleanerId) &&
+            viewer.cleaner?._id === photo.cleanerId &&
             viewer.assignment !== null &&
             viewer.booking.status === "CONFIRMED" &&
-            ["ACCEPTED", "IN_PROGRESS"].includes(viewer.assignment.status ?? "ACCEPTED") &&
-            Date.now() - photo.uploadedAt <= CLEANER_DELETE_WINDOW_MS;
+            ["ACCEPTED", "IN_PROGRESS", "COMPLETED"].includes(
+              viewer.assignment.status ?? "ACCEPTED",
+            );
+          const uploaderName = [uploader?.firstName, uploader?.lastName]
+            .filter(Boolean)
+            .join(" ");
           return {
             photoId: photo._id,
             photoType: photo.photoType,
@@ -244,7 +281,9 @@ export const listBookingPhotos = query({
             sizeBytes: photo.sizeBytes,
             originalFileName: photo.originalFileName,
             uploadedAt: photo.uploadedAt,
-            uploadedBy: cleaner ? `${cleaner.firstName} ${cleaner.lastName}` : "Cleaner",
+            uploadedBy: cleaner
+              ? `${cleaner.firstName} ${cleaner.lastName}`
+              : uploaderName || uploader?.email || "Admin",
             canDelete: viewer.user.role === "SUPER_ADMIN" ||
               viewer.user.role === "ADMIN" || cleanerCanDelete,
           };
@@ -286,8 +325,9 @@ export const preparePhotoDeletion = internalQuery({
         viewer.cleaner?._id !== photo.cleanerId ||
         viewer.booking.status !== "CONFIRMED" ||
         !viewer.assignment ||
-        !["ACCEPTED", "IN_PROGRESS"].includes(viewer.assignment.status ?? "ACCEPTED") ||
-        Date.now() - photo.uploadedAt > CLEANER_DELETE_WINDOW_MS
+        !["ACCEPTED", "IN_PROGRESS", "COMPLETED"].includes(
+          viewer.assignment.status ?? "ACCEPTED",
+        )
       ) {
         throw new Error("This photo can no longer be deleted from the cleaner portal.");
       }

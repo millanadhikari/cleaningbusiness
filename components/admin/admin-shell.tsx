@@ -31,6 +31,7 @@ import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
+import { AdminNotificationCenter } from '@/components/admin/admin-notification-center';
 import { BrandLogo } from '@/components/brand-logo';
 import { Button } from '@/components/ui/button';
 import {
@@ -455,6 +456,8 @@ export function AdminShell({ children, user }: AdminShellProps) {
                 </Link>
               </Button>
             </div>
+
+            <AdminNotificationCenter />
 
             <Badge
               variant="secondary"

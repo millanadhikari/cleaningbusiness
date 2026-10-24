@@ -369,6 +369,16 @@ export const createBookingRequestFromInsight = mutation({
       requestedChanges: args.kind === "RESCHEDULE" ? { scheduledDate: analysis.extractedRequestedDate, scheduledTime: analysis.extractedRequestedTime } : {},
       reason: analysis.extractedReason ?? analysis.summary, status: "PENDING", idempotencyKey: key, createdAt: now, updatedAt: now,
     });
+    await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+      type: "BOOKING_CHANGE_REQUESTED",
+      title: args.kind === "CANCELLATION" ? "Cancellation requested" : "Booking change requested",
+      body: `A customer email created a ${args.kind === "CANCELLATION" ? "cancellation" : "reschedule"} request for booking ${booking.reference ?? String(booking._id)}.`,
+      entityType: "BOOKING",
+      entityId: String(booking._id),
+      deepLink: `/admin/bookings/${booking._id}`,
+      priority: args.kind === "CANCELLATION" ? "HIGH" : "NORMAL",
+      dedupeKey: `booking-change-request:${requestId}`,
+    });
     await ctx.db.insert("emailAiAuditLogs", { emailThreadId: thread._id, emailMessageId: analysis.emailMessageId, userId: user._id, eventType: args.kind === "RESCHEDULE" ? "CHANGE_REQUEST_CREATED" : "CANCELLATION_REQUEST_CREATED", createdAt: now });
     return requestId;
   },

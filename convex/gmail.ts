@@ -912,9 +912,17 @@ export const storeInboundMessage = internalMutation({
     }
 
     if (!thread) {
-      await ctx.db.insert("unmatchedEmailMessages", {
+      const unmatchedMessageId = await ctx.db.insert("unmatchedEmailMessages", {
         ...args,
         receivedAt: Date.now(),
+      });
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+        type: "CUSTOMER_EMAIL_RECEIVED",
+        title: "Unmatched customer email received",
+        body: `${args.from} sent “${args.subject}”. Review and link it to a customer, quote, or booking.`,
+        deepLink: "/admin/email/unmatched",
+        priority: "HIGH",
+        dedupeKey: `unmatched-customer-email:${unmatchedMessageId}`,
       });
       return { result: "unmatched" as const, threadId: undefined };
     }
@@ -939,6 +947,16 @@ export const storeInboundMessage = internalMutation({
       requiresResponse: true, summary: "Analysis queued.", status: "PENDING", createdAt: now, updatedAt: now,
     });
     await ctx.scheduler.runAfter(0, internal.emailAi.analyzeInboundEmail, { emailMessageId: inboundMessageId });
+    await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+      type: "CUSTOMER_EMAIL_RECEIVED",
+      title: "Customer email received",
+      body: `${args.from} sent “${args.subject}”.`,
+      entityType: "EMAIL_THREAD",
+      entityId: String(thread._id),
+      deepLink: `/admin/email/unmatched`,
+      priority: "NORMAL",
+      dedupeKey: `customer-email:${inboundMessageId}`,
+    });
 
     const priorUnmatched = await ctx.db
       .query("unmatchedEmailMessages")

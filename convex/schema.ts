@@ -18,7 +18,88 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_clerk_user_id", ["clerkUserId"])
-    .index("by_email", ["email"]),
+    .index("by_email", ["email"])
+    .index("by_role_and_status", ["role", "status"]),
+  notifications: defineTable({
+    recipientUserId: v.id("users"),
+    type: v.union(
+      v.literal("QUOTE_REQUEST_NEW"),
+      v.literal("BOOKING_CREATED"),
+      v.literal("BOOKING_UPDATED"),
+      v.literal("BOOKING_CANCELLED"),
+      v.literal("BOOKING_CHANGE_REQUESTED"),
+      v.literal("JOB_OFFERED"),
+      v.literal("JOB_ACCEPTED"),
+      v.literal("JOB_DECLINED"),
+      v.literal("JOB_COMPLETED"),
+      v.literal("ISSUE_PHOTO_UPLOADED"),
+      v.literal("CUSTOMER_EMAIL_RECEIVED"),
+      v.literal("PAYMENT_SUCCEEDED"),
+      v.literal("PAYMENT_FAILED"),
+      v.literal("ADMIN_MESSAGE"),
+      v.literal("JOB_REMINDER"),
+    ),
+    title: v.string(),
+    body: v.string(),
+    entityType: v.optional(
+      v.union(
+        v.literal("BOOKING"),
+        v.literal("QUOTE_REQUEST"),
+        v.literal("EMAIL_THREAD"),
+        v.literal("PAYMENT"),
+        v.literal("SYSTEM"),
+      ),
+    ),
+    entityId: v.optional(v.string()),
+    deepLink: v.optional(v.string()),
+    priority: v.union(v.literal("NORMAL"), v.literal("HIGH")),
+    dedupeKey: v.string(),
+    isRead: v.boolean(),
+    readAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_recipient_and_created_at", ["recipientUserId", "createdAt"])
+    .index("by_recipient_and_read_and_created_at", ["recipientUserId", "isRead", "createdAt"])
+    .index("by_recipient_and_dedupe_key", ["recipientUserId", "dedupeKey"])
+    .index("by_created_at", ["createdAt"]),
+  pushDevices: defineTable({
+    userId: v.id("users"),
+    expoPushToken: v.string(),
+    nativePushToken: v.optional(v.string()),
+    platform: v.union(v.literal("ANDROID"), v.literal("IOS")),
+    installationId: v.string(),
+    projectId: v.optional(v.string()),
+    appVersion: v.optional(v.string()),
+    status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
+    lastRegisteredAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_expo_push_token", ["expoPushToken"])
+    .index("by_user_and_installation", ["userId", "installationId"]),
+  notificationPushDeliveries: defineTable({
+    notificationId: v.id("notifications"),
+    pushDeviceId: v.id("pushDevices"),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("TICKET_OK"),
+      v.literal("TICKET_ERROR"),
+      v.literal("RECEIPT_OK"),
+      v.literal("RECEIPT_ERROR"),
+      v.literal("FAILED"),
+    ),
+    expoTicketId: v.optional(v.string()),
+    attemptCount: v.number(),
+    errorCode: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_notification", ["notificationId"])
+    .index("by_notification_and_device", ["notificationId", "pushDeviceId"])
+    .index("by_expo_ticket", ["expoTicketId"])
+    .index("by_status_and_updated_at", ["status", "updatedAt"]),
   gmailConnections: defineTable({
     email: v.string(),
     refreshToken: v.optional(v.string()),
@@ -829,13 +910,16 @@ export default defineSchema({
     respondedAt: v.optional(v.number()),
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
+    reminder24hScheduleId: v.optional(v.id("_scheduled_functions")),
+    reminder2hScheduleId: v.optional(v.id("_scheduled_functions")),
+    reminderScheduleKey: v.optional(v.string()),
   })
     .index("by_booking", ["bookingId"])
     .index("by_cleaner", ["cleanerId"])
     .index("by_booking_and_cleaner", ["bookingId", "cleanerId"]),
   cleanerPhotos: defineTable({
     bookingId: v.id("bookings"),
-    cleanerId: v.id("cleaners"),
+    cleanerId: v.optional(v.id("cleaners")),
     cleanerUserId: v.id("users"),
     storagePath: v.string(),
     photoType: v.union(

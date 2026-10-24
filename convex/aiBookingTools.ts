@@ -1,7 +1,8 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel";
 import { activeService } from "./aiTools";
 import { listPublicSlots, ensurePublicSlotAvailable } from "./availability";
 import { assessPostcode } from "./serviceAreas";
@@ -196,7 +197,7 @@ async function createRequest(
   if (existing) return { status: "SUCCESS" as const, bookingReference: booking.reference ?? "", requestStatus: existing.status, duplicate: true };
   const pending = await ctx.db.query("bookingChangeRequests").withIndex("by_booking_and_status", (q) => q.eq("bookingId", booking._id).eq("status", "PENDING")).collect();
   if (pending.length >= 3) return { status: "RATE_LIMITED" as const, error: "Too many pending requests. Please wait for the team to review them." };
-  await ctx.db.insert("bookingChangeRequests", {
+  const requestId = await ctx.db.insert("bookingChangeRequests", {
     bookingId: booking._id,
     customerId: customer._id,
     chatSessionId: session._id,
@@ -209,6 +210,16 @@ async function createRequest(
     idempotencyKey,
     createdAt: now,
     updatedAt: now,
+  });
+  await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+    type: "BOOKING_CHANGE_REQUESTED",
+    title: args.type === "CANCELLATION" ? "Cancellation requested" : "Booking change requested",
+    body: `Customer requested ${args.type === "CANCELLATION" ? "cancellation of" : "changes to"} booking ${booking.reference ?? String(booking._id)}.`,
+    entityType: "BOOKING",
+    entityId: String(booking._id),
+    deepLink: `/admin/bookings/${booking._id}`,
+    priority: args.type === "CANCELLATION" ? "HIGH" : "NORMAL",
+    dedupeKey: `booking-change-request:${requestId}`,
   });
   await ctx.db.patch(session._id, { intent: args.type === "CANCELLATION" ? "CANCELLATION" : "BOOKING_CHANGE", updatedAt: now });
   await track(ctx, session, args.type === "CANCELLATION" ? "AI_CANCELLATION_REQUEST_CREATED" : "AI_RESCHEDULE_REQUEST_CREATED", args.page);

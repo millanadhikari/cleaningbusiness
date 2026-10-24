@@ -95,9 +95,11 @@ function uploadDirectly(
 export function CleanerPhotoGallery({
   bookingId,
   assignmentStatus,
+  adminMode = false,
 }: {
   bookingId: Id<"bookings">;
-  assignmentStatus: AssignmentStatus;
+  assignmentStatus?: AssignmentStatus;
+  adminMode?: boolean;
 }) {
   const photos = useQuery(api.cleanerPhotos.listBookingPhotos, { bookingId });
   const requestUpload = useAction(api.cleanerPhotoStorage.requestCleanerPhotoUpload);
@@ -111,7 +113,7 @@ export function CleanerPhotoGallery({
   const [previewPhotoId, setPreviewPhotoId] = useState<Id<"cleanerPhotos">>();
   const [deletingPhotoId, setDeletingPhotoId] = useState<Id<"cleanerPhotos">>();
   const [galleryError, setGalleryError] = useState<string>();
-  const canUpload = assignmentStatus === "ACCEPTED" || assignmentStatus === "IN_PROGRESS";
+  const canUpload = adminMode || assignmentStatus === "ACCEPTED" || assignmentStatus === "IN_PROGRESS";
 
   useEffect(() => {
     if (!photos?.length) {
@@ -228,7 +230,7 @@ export function CleanerPhotoGallery({
         </div>
         <div>
           <h2 className="font-bold">Before &amp; after photos</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-500">Document the property clearly. Photos are stored privately.</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">{adminMode ? "View and manage private photos for this booking." : "Document the property clearly. Photos are stored privately."}</p>
         </div>
       </div>
 

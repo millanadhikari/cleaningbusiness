@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
 import { requireRole } from "./lib/auth";
@@ -221,13 +222,26 @@ export const confirmPendingAction = internalMutation({
         if (!pending.idempotencyKey) throw new Error("Prepared request is no longer valid.");
         const idempotencyKey = pending.idempotencyKey;
         const existing = await ctx.db.query("bookingChangeRequests").withIndex("by_idempotency_key", q => q.eq("idempotencyKey", idempotencyKey)).unique();
-        if (!existing) await ctx.db.insert("bookingChangeRequests", {
-          bookingId: booking._id, customerId: booking.customerId, source: "CRM_AI",
-          type: pending.toolName === "createCancellationRequest" ? "CANCELLATION" : "RESCHEDULE",
-          currentSnapshot: { scheduledDate: booking.scheduledDate, scheduledTime: booking.scheduledTime, bookingStatus: booking.status, bookingUpdatedAt: booking.updatedAt },
-          requestedChanges: pending.toolName === "createCancellationRequest" ? {} : { scheduledDate: pending.requestedDate, scheduledTime: pending.requestedTime },
-          reason: pending.reason, status: "PENDING", idempotencyKey, createdAt: now, updatedAt: now,
-        });
+        if (!existing) {
+          const requestType = pending.toolName === "createCancellationRequest" ? "CANCELLATION" : "RESCHEDULE";
+          const requestId = await ctx.db.insert("bookingChangeRequests", {
+            bookingId: booking._id, customerId: booking.customerId, source: "CRM_AI",
+            type: requestType,
+            currentSnapshot: { scheduledDate: booking.scheduledDate, scheduledTime: booking.scheduledTime, bookingStatus: booking.status, bookingUpdatedAt: booking.updatedAt },
+            requestedChanges: requestType === "CANCELLATION" ? {} : { scheduledDate: pending.requestedDate, scheduledTime: pending.requestedTime },
+            reason: pending.reason, status: "PENDING", idempotencyKey, createdAt: now, updatedAt: now,
+          });
+          await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+            type: "BOOKING_CHANGE_REQUESTED",
+            title: requestType === "CANCELLATION" ? "Cancellation requested" : "Booking change requested",
+            body: `CRM AI created a ${requestType === "CANCELLATION" ? "cancellation" : "reschedule"} request for booking ${booking.reference ?? String(booking._id)}.`,
+            entityType: "BOOKING",
+            entityId: String(booking._id),
+            deepLink: `/admin/bookings/${booking._id}`,
+            priority: requestType === "CANCELLATION" ? "HIGH" : "NORMAL",
+            dedupeKey: `booking-change-request:${requestId}`,
+          });
+        }
         message = pending.toolName === "createCancellationRequest"
           ? `Cancellation request created for booking ${booking.reference ?? booking._id}. The booking remains unchanged pending review.`
           : `Booking change request created for ${booking.reference ?? booking._id}. The booking remains unchanged pending review.`;

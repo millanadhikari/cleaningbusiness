@@ -55,6 +55,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmailConversation } from "@/components/admin/email-conversation";
+import { CleanerPhotoGallery } from "@/components/cleaner/cleaner-photo-gallery";
 import styles from "./booking-detail.module.css";
 
 const cardClass =
@@ -615,6 +616,8 @@ export function BookingDetail({ bookingId }: { bookingId: Id<"bookings"> }) {
           </form>
         </CardContent>
       </Card>
+
+      <CleanerPhotoGallery bookingId={bookingId} adminMode />
 
       <EmailConversation bookingId={bookingId} />
 

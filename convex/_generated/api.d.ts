@@ -41,6 +41,7 @@ import type * as gmailActions from "../gmailActions.js";
 import type * as http from "../http.js";
 import type * as invoiceData from "../invoiceData.js";
 import type * as invoices from "../invoices.js";
+import type * as jobReminders from "../jobReminders.js";
 import type * as lib_ai_cloudflare from "../lib/ai/cloudflare.js";
 import type * as lib_ai_prompts from "../lib/ai/prompts.js";
 import type * as lib_ai_provider from "../lib/ai/provider.js";
@@ -53,7 +54,9 @@ import type * as lib_sendTransactionalEmail from "../lib/sendTransactionalEmail.
 import type * as lib_sydneyServiceArea from "../lib/sydneyServiceArea.js";
 import type * as lib_websiteAnalytics from "../lib/websiteAnalytics.js";
 import type * as lib_workReferences from "../lib/workReferences.js";
+import type * as notifications from "../notifications.js";
 import type * as platformUsage from "../platformUsage.js";
+import type * as pushNotifications from "../pushNotifications.js";
 import type * as quoteData from "../quoteData.js";
 import type * as quoteDocuments from "../quoteDocuments.js";
 import type * as quoteRequests from "../quoteRequests.js";
@@ -105,6 +108,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   invoiceData: typeof invoiceData;
   invoices: typeof invoices;
+  jobReminders: typeof jobReminders;
   "lib/ai/cloudflare": typeof lib_ai_cloudflare;
   "lib/ai/prompts": typeof lib_ai_prompts;
   "lib/ai/provider": typeof lib_ai_provider;
@@ -117,7 +121,9 @@ declare const fullApi: ApiFromModules<{
   "lib/sydneyServiceArea": typeof lib_sydneyServiceArea;
   "lib/websiteAnalytics": typeof lib_websiteAnalytics;
   "lib/workReferences": typeof lib_workReferences;
+  notifications: typeof notifications;
   platformUsage: typeof platformUsage;
+  pushNotifications: typeof pushNotifications;
   quoteData: typeof quoteData;
   quoteDocuments: typeof quoteDocuments;
   quoteRequests: typeof quoteRequests;

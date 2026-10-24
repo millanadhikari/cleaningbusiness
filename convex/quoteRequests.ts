@@ -596,6 +596,17 @@ export async function submitQuoteRequest(
       );
     }
 
+    await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+      type: "QUOTE_REQUEST_NEW",
+      title: `New quote request ${reference}`,
+      body: `${[firstName, lastName].filter(Boolean).join(" ")} requested ${serviceType} in ${suburb}.`,
+      entityType: "QUOTE_REQUEST",
+      entityId: String(quoteRequestId),
+      deepLink: `/admin/quotes/${quoteRequestId}`,
+      priority: "NORMAL",
+      dedupeKey: `quote-request:${quoteRequestId}`,
+    });
+
     return {
       quoteRequestId,
       reference,

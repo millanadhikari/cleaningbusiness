@@ -1,4 +1,5 @@
 import { v } from 'convex/values';
+import { internal } from './_generated/api';
 import { mutation, query } from './_generated/server';
 import { requireCleaner } from './lib/auth';
 
@@ -156,12 +157,31 @@ export const getJob = query({
 export const respondToJob = mutation({
   args: { bookingId: v.id('bookings'), response: v.union(v.literal('ACCEPTED'), v.literal('DECLINED')) },
   handler: async (ctx, args) => {
-    const { cleaner } = await requireCleaner(ctx);
+    const { user, cleaner } = await requireCleaner(ctx);
     const assignment = await ctx.db.query('bookingCleanerAssignments')
       .withIndex('by_booking_and_cleaner', (index) => index.eq('bookingId', args.bookingId).eq('cleanerId', cleaner._id)).unique();
     if (!assignment) throw new Error('This job is not assigned to you.');
     if ((assignment.status ?? 'ACCEPTED') !== 'OFFERED') throw new Error('This job offer has already been answered.');
     await ctx.db.patch(assignment._id, { status: args.response, respondedAt: Date.now() });
+    const booking = await ctx.db.get(args.bookingId);
+    const cleanerName = `${cleaner.firstName} ${cleaner.lastName}`.trim();
+    await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+      type: args.response === 'ACCEPTED' ? 'JOB_ACCEPTED' : 'JOB_DECLINED',
+      title: `Job ${args.response === 'ACCEPTED' ? 'accepted' : 'declined'}`,
+      body: `${cleanerName} ${args.response === 'ACCEPTED' ? 'accepted' : 'declined'} booking ${booking?.reference ?? String(args.bookingId)}.`,
+      entityType: 'BOOKING',
+      entityId: String(args.bookingId),
+      deepLink: `/admin/bookings/${args.bookingId}`,
+      priority: args.response === 'DECLINED' ? 'HIGH' : 'NORMAL',
+      dedupeKey: `job-response:${assignment._id}:${args.response}`,
+    });
+    await ctx.scheduler.runAfter(0, internal.notifications.markRecipientNotificationRead, {
+      recipientUserId: user._id,
+      dedupeKey: `job-offer:${assignment._id}`,
+    });
+    await ctx.scheduler.runAfter(0, internal.jobReminders.syncAssignmentReminders, {
+      assignmentId: assignment._id,
+    });
     return null;
   },
 });
@@ -182,6 +202,25 @@ export const updateJobProgress = mutation({
       startedAt: args.status === 'IN_PROGRESS' ? now : assignment.startedAt,
       completedAt: args.status === 'COMPLETED' ? now : undefined,
     });
+    if (args.status === 'COMPLETED') {
+      await ctx.scheduler.runAfter(0, internal.jobReminders.syncAssignmentReminders, {
+        assignmentId: assignment._id,
+      });
+    }
+    if (args.status === 'COMPLETED') {
+      const booking = await ctx.db.get(args.bookingId);
+      const cleanerName = `${cleaner.firstName} ${cleaner.lastName}`.trim();
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyActiveAdmins, {
+        type: 'JOB_COMPLETED',
+        title: 'Job completed',
+        body: `${cleanerName} completed booking ${booking?.reference ?? String(args.bookingId)}.`,
+        entityType: 'BOOKING',
+        entityId: String(args.bookingId),
+        deepLink: `/admin/bookings/${args.bookingId}`,
+        priority: 'NORMAL',
+        dedupeKey: `job-completed:${assignment._id}`,
+      });
+    }
     return null;
   },
 });

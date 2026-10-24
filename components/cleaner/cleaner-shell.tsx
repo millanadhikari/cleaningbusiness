@@ -8,6 +8,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { api } from '@/convex/_generated/api';
 import { BrandLogo } from '@/components/brand-logo';
+import { CleanerNotificationCenter } from '@/components/cleaner/cleaner-notification-center';
 import { cn } from '@/lib/utils';
 
 const nav = [
@@ -38,7 +39,7 @@ export function CleanerShell({ children }: { children: ReactNode }) {
   return (
     <div className="cleaner-portal min-h-dvh bg-[#e9efed] text-[#173c38]">
       <div className="relative mx-auto min-h-dvh w-full max-w-[480px] bg-[#f7f9f8] shadow-[0_0_60px_rgba(23,60,56,0.12)]">
-        {!onboarding ? <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-black/5 bg-[#f7f9f8]/95 px-5 backdrop-blur"><BrandLogo href="/cleaner" size="sm" priority /><UserButton /></header> : null}
+        {!onboarding ? <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-black/5 bg-[#f7f9f8]/95 px-5 backdrop-blur"><BrandLogo href="/cleaner" size="sm" priority /><div className="flex items-center gap-2"><CleanerNotificationCenter /><UserButton /></div></header> : null}
         <main className={cn('px-5', onboarding ? 'pb-8 pt-6' : 'pb-28 pt-5')}>{children}</main>
         {!onboarding ? <nav className="fixed inset-x-0 bottom-0 z-30 mx-auto flex h-[76px] max-w-[480px] items-start justify-around border-t border-black/5 bg-white/95 px-3 pt-3 backdrop-blur">
           {nav.map((item) => {

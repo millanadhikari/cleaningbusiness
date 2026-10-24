@@ -482,6 +482,17 @@ export const updateDetails = mutation({
         booking.scheduledDate !== args.scheduledDate ||
         booking.scheduledTime !== args.scheduledTime,
     });
+    await ctx.scheduler.runAfter(0, internal.notifications.notifyAssignedCleaners, {
+      bookingId: booking._id,
+      type: "BOOKING_UPDATED",
+      title: "Job details updated",
+      body: `Booking ${booking.reference ?? String(booking._id)} is now scheduled for ${args.scheduledDate} at ${args.scheduledTime}. Review the latest job details.`,
+      priority: "HIGH",
+      dedupeKey: `booking-updated:${booking._id}:${Date.now()}`,
+    });
+    await ctx.scheduler.runAfter(0, internal.jobReminders.rescheduleBookingReminders, {
+      bookingId: booking._id,
+    });
     return null;
   },
 });
@@ -731,7 +742,7 @@ export const setCleanerAssignment = mutation({
         throw new Error("Add an email address to the cleaner before assigning this job.");
       }
       if (!existing) {
-        await ctx.db.insert("bookingCleanerAssignments", {
+        const assignmentId = await ctx.db.insert("bookingCleanerAssignments", {
           bookingId: booking._id,
           cleanerId: cleaner._id,
           assignedByUserId: user._id,
@@ -761,9 +772,36 @@ export const setCleanerAssignment = mutation({
               .join(", "),
             jobUrl: cleanerJobUrl(args.appOrigin, String(booking._id)),
         });
+        if (cleaner.userId) {
+          await ctx.scheduler.runAfter(0, internal.notifications.createNotification, {
+            recipientUserId: cleaner.userId,
+            type: "JOB_OFFERED",
+            title: "New job offer",
+            body: `${service?.name ?? "Cleaning service"} on ${booking.scheduledDate} at ${booking.scheduledTime}. Review the job and accept or decline.`,
+            entityType: "BOOKING",
+            entityId: String(booking._id),
+            deepLink: `/cleaner/jobs/${booking._id}`,
+            priority: "HIGH",
+            dedupeKey: `job-offer:${assignmentId}`,
+          });
+        }
       }
     } else if (existing) {
+      for (const scheduleId of [existing.reminder24hScheduleId, existing.reminder2hScheduleId]) {
+        if (!scheduleId) continue;
+        try {
+          await ctx.scheduler.cancel(scheduleId);
+        } catch {
+          // Completed reminder schedules no longer need cancellation.
+        }
+      }
       await ctx.db.delete(existing._id);
+      if (cleaner.userId) {
+        await ctx.scheduler.runAfter(0, internal.notifications.deleteRecipientNotification, {
+          recipientUserId: cleaner.userId,
+          dedupeKey: `job-offer:${existing._id}`,
+        });
+      }
     }
     await ctx.db.patch(booking._id, { updatedAt: Date.now() });
     return null;
@@ -788,7 +826,7 @@ export const addBookingNote = mutation({
       [user.firstName, user.lastName].filter(Boolean).join(" ") ||
       user.email ||
       "Admin";
-    return ctx.db.insert("bookingNotes", {
+    const noteId = await ctx.db.insert("bookingNotes", {
       bookingId: booking._id,
       authorUserId: user._id,
       authorName,
@@ -797,6 +835,17 @@ export const addBookingNote = mutation({
       photoUrls,
       createdAt: Date.now(),
     });
+    if (args.kind === "JOB_NOTE") {
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyAssignedCleaners, {
+        bookingId: booking._id,
+        type: "ADMIN_MESSAGE",
+        title: "New message from the team",
+        body: `${authorName}: ${body}`,
+        priority: "NORMAL",
+        dedupeKey: `job-note:${noteId}`,
+      });
+    }
+    return noteId;
   },
 });
 

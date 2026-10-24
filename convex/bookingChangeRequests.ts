@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { mutation, query } from "./_generated/server";
 import { requireRole } from "./lib/auth";
 import { applyBookingDetails } from "./bookings";
@@ -53,6 +54,17 @@ export const review = mutation({
         return { status: "NEEDS_ATTENTION" as const, message: "Payment or refund review is required. The booking was not cancelled." };
       }
       await ctx.db.patch(booking._id, { status: "CANCELLED", updatedAt: now });
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyAssignedCleaners, {
+        bookingId: booking._id,
+        type: "BOOKING_CANCELLED",
+        title: "Job cancelled",
+        body: `Booking ${booking.reference ?? String(booking._id)} has been cancelled.`,
+        priority: "HIGH",
+        dedupeKey: `booking-cancelled:${request._id}`,
+      });
+      await ctx.scheduler.runAfter(0, internal.jobReminders.rescheduleBookingReminders, {
+        bookingId: booking._id,
+      });
     } else {
       const customer = await ctx.db.get(booking.customerId);
       if (!customer) throw new Error("Customer record not found.");
@@ -81,6 +93,17 @@ export const review = mutation({
         await ctx.db.patch(request._id, { status: "NEEDS_ATTENTION", adminReason: message.slice(0, 1000), reviewedByUserId: user._id, reviewedAt: now, updatedAt: now });
         return { status: "NEEDS_ATTENTION" as const, message };
       }
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyAssignedCleaners, {
+        bookingId: booking._id,
+        type: "BOOKING_UPDATED",
+        title: "Job details updated",
+        body: `Booking ${booking.reference ?? String(booking._id)} has been updated. Review the latest date, time, and job details.`,
+        priority: "HIGH",
+        dedupeKey: `booking-change-approved:${request._id}`,
+      });
+      await ctx.scheduler.runAfter(0, internal.jobReminders.rescheduleBookingReminders, {
+        bookingId: booking._id,
+      });
     }
     await ctx.db.patch(request._id, { status: "APPROVED", adminReason, reviewedByUserId: user._id, reviewedAt: now, updatedAt: now });
     return { status: "APPROVED" as const, message: request.type === "CANCELLATION" ? "Cancellation approved and booking cancelled." : "Request approved and booking updated." };

@@ -18,7 +18,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_clerk_user_id", ["clerkUserId"])
-    .index("by_email", ["email"]),
+    .index("by_email", ["email"])
+    .index("by_role_and_status", ["role", "status"]),
   notifications: defineTable({
     recipientUserId: v.id("users"),
     type: v.union(
@@ -61,6 +62,44 @@ export default defineSchema({
     .index("by_recipient_and_read_and_created_at", ["recipientUserId", "isRead", "createdAt"])
     .index("by_recipient_and_dedupe_key", ["recipientUserId", "dedupeKey"])
     .index("by_created_at", ["createdAt"]),
+  pushDevices: defineTable({
+    userId: v.id("users"),
+    expoPushToken: v.string(),
+    nativePushToken: v.optional(v.string()),
+    platform: v.union(v.literal("ANDROID"), v.literal("IOS")),
+    installationId: v.string(),
+    projectId: v.optional(v.string()),
+    appVersion: v.optional(v.string()),
+    status: v.union(v.literal("ACTIVE"), v.literal("INACTIVE")),
+    lastRegisteredAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_expo_push_token", ["expoPushToken"])
+    .index("by_user_and_installation", ["userId", "installationId"]),
+  notificationPushDeliveries: defineTable({
+    notificationId: v.id("notifications"),
+    pushDeviceId: v.id("pushDevices"),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("TICKET_OK"),
+      v.literal("TICKET_ERROR"),
+      v.literal("RECEIPT_OK"),
+      v.literal("RECEIPT_ERROR"),
+      v.literal("FAILED"),
+    ),
+    expoTicketId: v.optional(v.string()),
+    attemptCount: v.number(),
+    errorCode: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_notification", ["notificationId"])
+    .index("by_notification_and_device", ["notificationId", "pushDeviceId"])
+    .index("by_expo_ticket", ["expoTicketId"])
+    .index("by_status_and_updated_at", ["status", "updatedAt"]),
   gmailConnections: defineTable({
     email: v.string(),
     refreshToken: v.optional(v.string()),
@@ -871,6 +910,9 @@ export default defineSchema({
     respondedAt: v.optional(v.number()),
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
+    reminder24hScheduleId: v.optional(v.id("_scheduled_functions")),
+    reminder2hScheduleId: v.optional(v.id("_scheduled_functions")),
+    reminderScheduleKey: v.optional(v.string()),
   })
     .index("by_booking", ["bookingId"])
     .index("by_cleaner", ["cleanerId"])
